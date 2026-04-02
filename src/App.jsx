@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "./supabaseClient.js";
 
 const rideStatuses = ["Gepland", "Bevestigd", "Onderweg", "Afgerond"];
-const driverOptions = ["Julian", "Mohammed", "Kevin"];
+const driverOptions = ["Erwin", "Julian", "Gerben"];
 
 function sortRides(list) {
   return [...list].sort((a, b) => {
