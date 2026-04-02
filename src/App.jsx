@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "./supabaseClient.js";
 
 const rideStatuses = ["Gepland", "Bevestigd", "Onderweg", "Afgerond"];
-const driverOptions = ["Erwin", "Julian", "Gerben","Hans"];
+const driverOptions = ["Julian", "Mohammed", "Kevin"];
 
 function sortRides(list) {
   return [...list].sort((a, b) => {
@@ -266,6 +266,8 @@ function RideEditor({ selectedRide, onSave, onDelete, onNew, saving }) {
       ride_date: ride?.ride_date || "",
       departure_time: ride?.departure_time || "",
       arrival_time: ride?.arrival_time || "",
+      pickup_location: ride?.pickup_location || "",
+      delivery_location: ride?.delivery_location || "",
       cargo: ride?.cargo || "",
       notes: ride?.notes || "",
       status: ride?.status || "Gepland",
@@ -289,9 +291,11 @@ function RideEditor({ selectedRide, onSave, onDelete, onNew, saving }) {
       !formData.ride_date ||
       !formData.departure_time ||
       !formData.arrival_time ||
+      !formData.pickup_location.trim() ||
+      !formData.delivery_location.trim() ||
       !formData.cargo.trim()
     ) {
-      alert("Vul datum, vertrektijd, aankomsttijd en kenteken/chassisnummer in.");
+      alert("Vul datum, tijden, van-locatie, naar-locatie en kenteken/chassisnummer in.");
       return;
     }
 
@@ -301,6 +305,8 @@ function RideEditor({ selectedRide, onSave, onDelete, onNew, saving }) {
       ride_date: formData.ride_date,
       departure_time: formData.departure_time,
       arrival_time: formData.arrival_time,
+      pickup_location: formData.pickup_location.trim(),
+      delivery_location: formData.delivery_location.trim(),
       cargo: formData.cargo.trim(),
       notes: formData.notes.trim(),
       status: formData.status,
@@ -404,6 +410,28 @@ function RideEditor({ selectedRide, onSave, onDelete, onNew, saving }) {
         </div>
 
         <label style={labelStyle}>
+          Van locatie
+          <input
+            type="text"
+            value={formData.pickup_location}
+            onChange={(e) => updateField("pickup_location", e.target.value)}
+            placeholder="Bijv. Amsterdam"
+            style={inputStyle}
+          />
+        </label>
+
+        <label style={labelStyle}>
+          Naar locatie
+          <input
+            type="text"
+            value={formData.delivery_location}
+            onChange={(e) => updateField("delivery_location", e.target.value)}
+            placeholder="Bijv. Rotterdam"
+            style={inputStyle}
+          />
+        </label>
+
+        <label style={labelStyle}>
           Kenteken of chassisnummer
           <input
             type="text"
@@ -498,7 +526,7 @@ function RideTable({
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Zoek op kenteken, chassisnummer, notities..."
+            placeholder="Zoek op locatie, kenteken, chassisnummer of notities..."
             style={inputStyle}
           />
 
@@ -534,12 +562,14 @@ function RideTable({
       </div>
 
       <div style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 980 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1180 }}>
           <thead>
             <tr style={{ background: "#f9fafb", color: "#6b7280", textAlign: "left" }}>
               <th style={thStyle}>Datum</th>
               <th style={thStyle}>Tijd</th>
               <th style={thStyle}>Chauffeur</th>
+              <th style={thStyle}>Van</th>
+              <th style={thStyle}>Naar</th>
               <th style={thStyle}>Vervoer</th>
               <th style={thStyle}>Status</th>
               <th style={thStyle}>Notities</th>
@@ -549,7 +579,7 @@ function RideTable({
           <tbody>
             {rides.length === 0 ? (
               <tr>
-                <td colSpan={6} style={{ padding: 24, textAlign: "center", color: "#6b7280" }}>
+                <td colSpan={8} style={{ padding: 24, textAlign: "center", color: "#6b7280" }}>
                   Geen ritten gevonden binnen deze filters.
                 </td>
               </tr>
@@ -574,6 +604,8 @@ function RideTable({
                       </div>
                     </td>
                     <td style={tdStyle}>{ride.driver_name}</td>
+                    <td style={tdStyle}>{ride.pickup_location || "—"}</td>
+                    <td style={tdStyle}>{ride.delivery_location || "—"}</td>
                     <td style={tdStyle}>{ride.cargo}</td>
                     <td style={tdStyle}>
                       <Badge style={getRideStatusStyle(ride.status)}>{ride.status}</Badge>
@@ -581,7 +613,7 @@ function RideTable({
                     <td style={tdStyle}>
                       <div
                         style={{
-                          maxWidth: 280,
+                          maxWidth: 220,
                           whiteSpace: "nowrap",
                           overflow: "hidden",
                           textOverflow: "ellipsis",
@@ -647,6 +679,8 @@ function Dashboard({ session }) {
           ride_date: ride.ride_date,
           departure_time: ride.departure_time,
           arrival_time: ride.arrival_time,
+          pickup_location: ride.pickup_location,
+          delivery_location: ride.delivery_location,
           cargo: ride.cargo,
           notes: ride.notes,
           status: ride.status,
@@ -669,6 +703,8 @@ function Dashboard({ session }) {
           ride_date: ride.ride_date,
           departure_time: ride.departure_time,
           arrival_time: ride.arrival_time,
+          pickup_location: ride.pickup_location,
+          delivery_location: ride.delivery_location,
           cargo: ride.cargo,
           notes: ride.notes,
           status: ride.status,
@@ -719,6 +755,8 @@ function Dashboard({ session }) {
         !q ||
         ride.cargo.toLowerCase().includes(q) ||
         (ride.notes || "").toLowerCase().includes(q) ||
+        (ride.pickup_location || "").toLowerCase().includes(q) ||
+        (ride.delivery_location || "").toLowerCase().includes(q) ||
         ride.ride_date.toLowerCase().includes(q) ||
         ride.departure_time.toLowerCase().includes(q) ||
         ride.arrival_time.toLowerCase().includes(q) ||
