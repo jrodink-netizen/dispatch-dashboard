@@ -2,7 +2,24 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "./supabaseClient.js";
 
 const rideStatuses = ["Gepland", "Bevestigd", "Onderweg", "Afgerond"];
-const driverOptions = ["Erwin", "Julian", "Gerben"];
+const driverOptions = ["Erwin", "Julian", "Gerben", "Hans", "Fiona"];
+
+function useWindowWidth() {
+  const getWidth = () => (typeof window !== "undefined" ? window.innerWidth : 1200);
+  const [windowWidth, setWindowWidth] = useState(getWidth);
+
+  useEffect(() => {
+    function handleResize() {
+      setWindowWidth(getWidth());
+    }
+
+    handleResize();
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  return windowWidth;
+}
 
 function sortRides(list) {
   return [...list].sort((a, b) => {
@@ -21,6 +38,20 @@ function formatDate(dateString) {
     month: "2-digit",
     year: "numeric",
   }).format(date);
+}
+
+function addMinutesToTimeString(timeString, minutesToAdd) {
+  if (!timeString || !timeString.includes(":")) return "";
+
+  const [hours, minutes] = timeString.split(":").map(Number);
+  if (Number.isNaN(hours) || Number.isNaN(minutes)) return "";
+
+  const totalMinutes = hours * 60 + minutes + minutesToAdd;
+  const normalizedMinutes = ((totalMinutes % 1440) + 1440) % 1440;
+  const newHours = Math.floor(normalizedMinutes / 60);
+  const newMinutes = normalizedMinutes % 60;
+
+  return `${String(newHours).padStart(2, "0")}:${String(newMinutes).padStart(2, "0")}`;
 }
 
 function getRideStatusStyle(status) {
@@ -75,6 +106,9 @@ function StatCard({ title, value, sub }) {
 }
 
 function AuthScreen() {
+  const windowWidth = useWindowWidth();
+  const isMobile = windowWidth < 900;
+
   const [mode, setMode] = useState("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -119,7 +153,7 @@ function AuthScreen() {
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        padding: 24,
+        padding: isMobile ? 16 : 24,
         fontFamily: "Arial, sans-serif",
       }}
     >
@@ -128,14 +162,14 @@ function AuthScreen() {
           width: "100%",
           maxWidth: 980,
           display: "grid",
-          gridTemplateColumns: "1.1fr 0.9fr",
+          gridTemplateColumns: isMobile ? "1fr" : "1.1fr 0.9fr",
           gap: 24,
         }}
       >
         <div
           style={{
             color: "white",
-            padding: 36,
+            padding: isMobile ? 24 : 36,
             borderRadius: 28,
             border: "1px solid rgba(255,255,255,0.12)",
             background: "rgba(255,255,255,0.06)",
@@ -160,8 +194,8 @@ function AuthScreen() {
             D
           </div>
 
-          <h1 style={{ margin: 0, fontSize: 46, lineHeight: 1.05 }}>Dispatch Dashboard</h1>
-          <p style={{ color: "#cbd5e1", fontSize: 18, lineHeight: 1.6, marginTop: 18, maxWidth: 520 }}>
+          <h1 style={{ margin: 0, fontSize: isMobile ? 36 : 46, lineHeight: 1.05 }}>Transport Planner</h1>
+          <p style={{ color: "#cbd5e1", fontSize: isMobile ? 16 : 18, lineHeight: 1.6, marginTop: 18, maxWidth: 520 }}>
             Echte login, gedeelde planning en ritten die online worden opgeslagen.
           </p>
         </div>
@@ -170,11 +204,11 @@ function AuthScreen() {
           style={{
             background: "white",
             borderRadius: 28,
-            padding: 34,
+            padding: isMobile ? 24 : 34,
             boxShadow: "0 24px 60px rgba(0,0,0,0.18)",
           }}
         >
-          <div style={{ fontSize: 30, fontWeight: 900, color: "#111827", marginBottom: 8 }}>
+          <div style={{ fontSize: isMobile ? 26 : 30, fontWeight: 900, color: "#111827", marginBottom: 8 }}>
             {mode === "signin" ? "Inloggen" : "Account aanmaken"}
           </div>
           <div style={{ color: "#6b7280", marginBottom: 22 }}>
@@ -259,6 +293,9 @@ function AuthScreen() {
 }
 
 function RideEditor({ selectedRide, onSave, onDelete, onNew, saving }) {
+  const windowWidth = useWindowWidth();
+  const isSmall = windowWidth < 700;
+
   function createFormState(ride) {
     return {
       id: ride?.id || null,
@@ -275,9 +312,11 @@ function RideEditor({ selectedRide, onSave, onDelete, onNew, saving }) {
   }
 
   const [formData, setFormData] = useState(createFormState(selectedRide));
+  const [isReturnDraft, setIsReturnDraft] = useState(false);
 
   useEffect(() => {
     setFormData(createFormState(selectedRide));
+    setIsReturnDraft(false);
   }, [selectedRide]);
 
   function updateField(field, value) {
@@ -290,12 +329,10 @@ function RideEditor({ selectedRide, onSave, onDelete, onNew, saving }) {
     if (
       !formData.ride_date ||
       !formData.departure_time ||
-      !formData.arrival_time ||
       !formData.pickup_location.trim() ||
-      !formData.delivery_location.trim() ||
-      !formData.cargo.trim()
+      !formData.delivery_location.trim()
     ) {
-      alert("Vul datum, tijden, van-locatie, naar-locatie en kenteken/chassisnummer in.");
+      alert("Vul datum, vertrektijd, van-locatie en naar-locatie in.");
       return;
     }
 
@@ -313,7 +350,28 @@ function RideEditor({ selectedRide, onSave, onDelete, onNew, saving }) {
     });
   }
 
-  const isEditing = Boolean(selectedRide?.id);
+  function handleCreateReturnRide() {
+    if (!selectedRide) return;
+
+    const returnDepartureTime = addMinutesToTimeString(formData.arrival_time, 15);
+
+    setFormData({
+      id: null,
+      driver_name: formData.driver_name,
+      ride_date: formData.ride_date,
+      departure_time: returnDepartureTime,
+      arrival_time: "",
+      pickup_location: formData.delivery_location || "",
+      delivery_location: formData.pickup_location || "",
+      cargo: "",
+      notes: "",
+      status: "Gepland",
+    });
+
+    setIsReturnDraft(true);
+  }
+
+  const isEditingOriginalRide = Boolean(selectedRide?.id) && !isReturnDraft;
 
   return (
     <div
@@ -322,22 +380,35 @@ function RideEditor({ selectedRide, onSave, onDelete, onNew, saving }) {
         borderRadius: 24,
         border: "1px solid #e5e7eb",
         boxShadow: "0 10px 24px rgba(17,24,39,0.05)",
-        padding: 22,
-        position: "sticky",
+        padding: isSmall ? 18 : 22,
+        position: windowWidth < 1000 ? "static" : "sticky",
         top: 98,
       }}
     >
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", marginBottom: 16 }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          gap: 10,
+          alignItems: isSmall ? "flex-start" : "center",
+          flexDirection: isSmall ? "column" : "row",
+          marginBottom: 16,
+        }}
+      >
         <div>
           <div style={{ fontSize: 22, fontWeight: 900, color: "#111827" }}>
-            {isEditing ? "Rit bewerken" : "Nieuwe rit"}
+            {isEditingOriginalRide ? "Rit bewerken" : isReturnDraft ? "Nieuwe retour rit" : "Nieuwe rit"}
           </div>
           <div style={{ color: "#6b7280", marginTop: 4 }}>
-            {isEditing ? "Pas de geselecteerde rit aan." : "Voeg direct een nieuwe rit toe."}
+            {isEditingOriginalRide
+              ? "Pas de geselecteerde rit aan."
+              : isReturnDraft
+              ? "Controleer de retour rit en sla deze op."
+              : "Voeg direct een nieuwe rit toe."}
           </div>
         </div>
 
-        {isEditing ? (
+        {isEditingOriginalRide ? (
           <button type="button" onClick={onNew} style={secondaryButtonStyle}>
             Nieuwe rit
           </button>
@@ -360,7 +431,13 @@ function RideEditor({ selectedRide, onSave, onDelete, onNew, saving }) {
           </select>
         </label>
 
-        <div style={twoColStyle}>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: isSmall ? "1fr" : "1fr 1fr",
+            gap: 12,
+          }}
+        >
           <label style={labelStyle}>
             Datum
             <input
@@ -387,7 +464,13 @@ function RideEditor({ selectedRide, onSave, onDelete, onNew, saving }) {
           </label>
         </div>
 
-        <div style={twoColStyle}>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: isSmall ? "1fr" : "1fr 1fr",
+            gap: 12,
+          }}
+        >
           <label style={labelStyle}>
             Vertrektijd
             <input
@@ -454,29 +537,112 @@ function RideEditor({ selectedRide, onSave, onDelete, onNew, saving }) {
 
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           <button type="submit" style={primaryButtonStyle} disabled={saving}>
-            {saving ? "Opslaan..." : isEditing ? "Wijzigingen opslaan" : "Rit opslaan"}
+            {saving
+              ? "Opslaan..."
+              : isEditingOriginalRide
+              ? "Wijzigingen opslaan"
+              : isReturnDraft
+              ? "Retour rit opslaan"
+              : "Rit opslaan"}
           </button>
 
-          {isEditing ? (
-            <button
-              type="button"
-              onClick={() => onDelete(selectedRide.id)}
-              disabled={saving}
-              style={{
-                background: "#fee2e2",
-                color: "#b91c1c",
-                border: "1px solid #fecaca",
-                borderRadius: 14,
-                padding: "12px 16px",
-                fontWeight: 800,
-                cursor: "pointer",
-              }}
-            >
-              Verwijderen
-            </button>
+          {isEditingOriginalRide ? (
+            <>
+              <button type="button" onClick={handleCreateReturnRide} disabled={saving} style={secondaryButtonStyle}>
+                Retour
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onDelete(selectedRide.id)}
+                disabled={saving}
+                style={{
+                  background: "#fee2e2",
+                  color: "#b91c1c",
+                  border: "1px solid #fecaca",
+                  borderRadius: 14,
+                  padding: "12px 16px",
+                  fontWeight: 800,
+                  cursor: "pointer",
+                }}
+              >
+                Verwijderen
+              </button>
+            </>
           ) : null}
         </div>
       </form>
+    </div>
+  );
+}
+
+function RideCardsMobile({ rides, selectedRideId, onSelectRide }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      {rides.length === 0 ? (
+        <div
+          style={{
+            background: "white",
+            borderRadius: 20,
+            border: "1px solid #e5e7eb",
+            padding: 20,
+            textAlign: "center",
+            color: "#6b7280",
+          }}
+        >
+          Geen ritten gevonden binnen deze filters.
+        </div>
+      ) : (
+        rides.map((ride) => {
+          const selected = selectedRideId === ride.id;
+
+          return (
+            <button
+              key={ride.id}
+              type="button"
+              onClick={() => onSelectRide(ride)}
+              style={{
+                width: "100%",
+                textAlign: "left",
+                background: selected ? "#eff6ff" : "white",
+                border: selected ? "1px solid #bfdbfe" : "1px solid #e5e7eb",
+                borderRadius: 20,
+                padding: 16,
+                cursor: "pointer",
+                boxShadow: "0 10px 24px rgba(17,24,39,0.05)",
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start" }}>
+                <div>
+                  <div style={{ fontWeight: 900, color: "#111827", fontSize: 15 }}>{formatDate(ride.ride_date)}</div>
+                  <div style={{ color: "#4b5563", marginTop: 4, fontWeight: 700 }}>
+                    {ride.departure_time} → {ride.arrival_time || "—"}
+                  </div>
+                </div>
+
+                <Badge style={getRideStatusStyle(ride.status)}>{ride.status}</Badge>
+              </div>
+
+              <div style={{ marginTop: 12, color: "#111827", fontWeight: 800 }}>{ride.driver_name}</div>
+
+              <div style={{ marginTop: 10, color: "#374151", fontSize: 14, lineHeight: 1.5 }}>
+                <div>
+                  <strong>Van:</strong> {ride.pickup_location || "—"}
+                </div>
+                <div style={{ marginTop: 4 }}>
+                  <strong>Naar:</strong> {ride.delivery_location || "—"}
+                </div>
+                <div style={{ marginTop: 4 }}>
+                  <strong>Vervoer:</strong> {ride.cargo || "—"}
+                </div>
+                <div style={{ marginTop: 4 }}>
+                  <strong>Notities:</strong> {ride.notes || "—"}
+                </div>
+              </div>
+            </button>
+          );
+        })
+      )}
     </div>
   );
 }
@@ -495,6 +661,10 @@ function RideTable({
   setDateFilter,
   clearFilters,
 }) {
+  const windowWidth = useWindowWidth();
+  const isNarrow = windowWidth < 900;
+  const isMobileCards = windowWidth < 700;
+
   return (
     <div
       style={{
@@ -518,7 +688,7 @@ function RideTable({
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "1.4fr 1fr 1fr 1fr auto",
+            gridTemplateColumns: isNarrow ? "1fr" : "1.4fr 1fr 1fr 1fr auto",
             gap: 12,
             marginTop: 18,
           }}
@@ -561,80 +731,94 @@ function RideTable({
         </div>
       </div>
 
-      <div style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1180 }}>
-          <thead>
-            <tr style={{ background: "#f9fafb", color: "#6b7280", textAlign: "left" }}>
-              <th style={thStyle}>Datum</th>
-              <th style={thStyle}>Tijd</th>
-              <th style={thStyle}>Chauffeur</th>
-              <th style={thStyle}>Van</th>
-              <th style={thStyle}>Naar</th>
-              <th style={thStyle}>Vervoer</th>
-              <th style={thStyle}>Status</th>
-              <th style={thStyle}>Notities</th>
-            </tr>
-          </thead>
-
-          <tbody>
-            {rides.length === 0 ? (
-              <tr>
-                <td colSpan={8} style={{ padding: 24, textAlign: "center", color: "#6b7280" }}>
-                  Geen ritten gevonden binnen deze filters.
-                </td>
+      {isMobileCards ? (
+        <div style={{ padding: 12, background: "#f9fafb" }}>
+          <RideCardsMobile
+            rides={rides}
+            selectedRideId={selectedRideId}
+            onSelectRide={onSelectRide}
+          />
+        </div>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1180 }}>
+            <thead>
+              <tr style={{ background: "#f9fafb", color: "#6b7280", textAlign: "left" }}>
+                <th style={thStyle}>Datum</th>
+                <th style={thStyle}>Tijd</th>
+                <th style={thStyle}>Chauffeur</th>
+                <th style={thStyle}>Van</th>
+                <th style={thStyle}>Naar</th>
+                <th style={thStyle}>Vervoer</th>
+                <th style={thStyle}>Status</th>
+                <th style={thStyle}>Notities</th>
               </tr>
-            ) : (
-              rides.map((ride) => {
-                const selected = selectedRideId === ride.id;
+            </thead>
 
-                return (
-                  <tr
-                    key={ride.id}
-                    onClick={() => onSelectRide(ride)}
-                    style={{
-                      background: selected ? "#eff6ff" : "white",
-                      cursor: "pointer",
-                      borderTop: "1px solid #e5e7eb",
-                    }}
-                  >
-                    <td style={tdStyle}>{formatDate(ride.ride_date)}</td>
-                    <td style={tdStyle}>
-                      <div style={{ fontWeight: 800, color: "#111827" }}>
-                        {ride.departure_time} → {ride.arrival_time}
-                      </div>
-                    </td>
-                    <td style={tdStyle}>{ride.driver_name}</td>
-                    <td style={tdStyle}>{ride.pickup_location || "—"}</td>
-                    <td style={tdStyle}>{ride.delivery_location || "—"}</td>
-                    <td style={tdStyle}>{ride.cargo}</td>
-                    <td style={tdStyle}>
-                      <Badge style={getRideStatusStyle(ride.status)}>{ride.status}</Badge>
-                    </td>
-                    <td style={tdStyle}>
-                      <div
-                        style={{
-                          maxWidth: 220,
-                          whiteSpace: "nowrap",
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          color: "#4b5563",
-                        }}
-                      >
-                        {ride.notes || "—"}
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
-      </div>
+            <tbody>
+              {rides.length === 0 ? (
+                <tr>
+                  <td colSpan={8} style={{ padding: 24, textAlign: "center", color: "#6b7280" }}>
+                    Geen ritten gevonden binnen deze filters.
+                  </td>
+                </tr>
+              ) : (
+                rides.map((ride) => {
+                  const selected = selectedRideId === ride.id;
+
+                  return (
+                    <tr
+                      key={ride.id}
+                      onClick={() => onSelectRide(ride)}
+                      style={{
+                        background: selected ? "#eff6ff" : "white",
+                        cursor: "pointer",
+                        borderTop: "1px solid #e5e7eb",
+                      }}
+                    >
+                      <td style={tdStyle}>{formatDate(ride.ride_date)}</td>
+                      <td style={tdStyle}>
+                        <div style={{ fontWeight: 800, color: "#111827" }}>
+                          {ride.departure_time} → {ride.arrival_time}
+                        </div>
+                      </td>
+                      <td style={tdStyle}>{ride.driver_name}</td>
+                      <td style={tdStyle}>{ride.pickup_location || "—"}</td>
+                      <td style={tdStyle}>{ride.delivery_location || "—"}</td>
+                      <td style={tdStyle}>{ride.cargo}</td>
+                      <td style={tdStyle}>
+                        <Badge style={getRideStatusStyle(ride.status)}>{ride.status}</Badge>
+                      </td>
+                      <td style={tdStyle}>
+                        <div
+                          style={{
+                            maxWidth: 220,
+                            whiteSpace: "nowrap",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            color: "#4b5563",
+                          }}
+                        >
+                          {ride.notes || "—"}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
 
 function Dashboard({ session }) {
+  const windowWidth = useWindowWidth();
+  const isTabletOrSmaller = windowWidth < 1000;
+  const isPhone = windowWidth < 600;
+
   const [rides, setRides] = useState([]);
   const [selectedRideId, setSelectedRideId] = useState(null);
   const [search, setSearch] = useState("");
@@ -749,8 +933,18 @@ function Dashboard({ session }) {
 
   const filteredRides = useMemo(() => {
     const q = search.trim().toLowerCase();
+    const today = new Date().toISOString().slice(0, 10);
 
     return rides.filter((ride) => {
+      const isPastCompletedRide =
+        !dateFilter &&
+        ride.status === "Afgerond" &&
+        ride.ride_date < today;
+
+      if (isPastCompletedRide) {
+        return false;
+      }
+
       const matchesSearch =
         !q ||
         ride.cargo.toLowerCase().includes(q) ||
@@ -796,7 +990,7 @@ function Dashboard({ session }) {
           style={{
             maxWidth: 1500,
             margin: "0 auto",
-            padding: "18px 24px",
+            padding: isPhone ? "16px" : "18px 24px",
             display: "flex",
             justifyContent: "space-between",
             gap: 16,
@@ -805,8 +999,8 @@ function Dashboard({ session }) {
           }}
         >
           <div>
-            <div style={{ fontSize: 30, fontWeight: 900 }}>Dispatch Dashboard</div>
-            <div style={{ color: "#cbd5e1", marginTop: 6 }}>
+            <div style={{ fontSize: isPhone ? 24 : 30, fontWeight: 900 }}>Transport Planner</div>
+            <div style={{ color: "#cbd5e1", marginTop: 6, wordBreak: "break-word" }}>
               Ingelogd als {session.user.email}
             </div>
           </div>
@@ -817,8 +1011,15 @@ function Dashboard({ session }) {
         </div>
       </header>
 
-      <main style={{ maxWidth: 1500, margin: "0 auto", padding: 24 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 16, marginBottom: 24 }}>
+      <main style={{ maxWidth: 1500, margin: "0 auto", padding: isPhone ? 16 : 24 }}>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: isPhone ? "1fr" : isTabletOrSmaller ? "repeat(2,1fr)" : "repeat(4,1fr)",
+            gap: 16,
+            marginBottom: 24,
+          }}
+        >
           <StatCard title="Totaal ritten" value={rides.length} sub="Live database" />
           <StatCard title="Ritten vandaag" value={todayRides} sub="Op basis van vandaag" />
           <StatCard title="Onderweg" value={inProgress} sub="Nu actief" />
@@ -830,7 +1031,14 @@ function Dashboard({ session }) {
             Laden...
           </div>
         ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 420px", gap: 24, alignItems: "start" }}>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: isTabletOrSmaller ? "1fr" : "minmax(0,1fr) 420px",
+              gap: 24,
+              alignItems: "start",
+            }}
+          >
             <RideTable
               rides={filteredRides}
               selectedRideId={selectedRideId}
@@ -931,12 +1139,6 @@ const tdStyle = {
   verticalAlign: "middle",
   color: "#374151",
   fontSize: 14,
-};
-
-const twoColStyle = {
-  display: "grid",
-  gridTemplateColumns: "1fr 1fr",
-  gap: 12,
 };
 
 function App() {
