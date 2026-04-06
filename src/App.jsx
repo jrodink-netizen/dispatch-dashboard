@@ -1,23 +1,65 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, createContext, useContext } from "react";
 import { supabase } from "./supabaseClient.js";
 
+// --- Thema Configuratie ---
+const lightTheme = {
+  bg: "#f3f4f6",
+  cardBg: "white",
+  textMain: "#111827",
+  textMuted: "#6b7280",
+  border: "#e5e7eb",
+  inputBg: "white",
+  inputBorder: "#d1d5db",
+  primaryBtnBg: "#111827",
+  primaryBtnText: "white",
+  secondaryBtnBg: "white",
+  secondaryBtnText: "#111827",
+  rowSelected: "#eff6ff",
+  rowSelectedBorder: "#bfdbfe",
+  tableHeaderBg: "#f9fafb",
+  shadow: "0 10px 24px rgba(17,24,39,0.05)",
+  chartBar: "#3b82f6",
+  chartBg: "#f1f5f9",
+  isDark: false,
+};
+
+const darkTheme = {
+  bg: "#0f172a",
+  cardBg: "#1e293b",
+  textMain: "#f8fafc",
+  textMuted: "#94a3b8",
+  border: "#334155",
+  inputBg: "#0f172a",
+  inputBorder: "#475569",
+  primaryBtnBg: "#3b82f6",
+  primaryBtnText: "white",
+  secondaryBtnBg: "#1e293b",
+  secondaryBtnText: "#f8fafc",
+  rowSelected: "#1e3a8a",
+  rowSelectedBorder: "#3b82f6",
+  tableHeaderBg: "#0f172a",
+  shadow: "0 10px 24px rgba(0,0,0,0.3)",
+  chartBar: "#60a5fa",
+  chartBg: "#334155",
+  isDark: true,
+};
+
+const ThemeContext = createContext();
 const rideStatuses = ["Gepland", "Bevestigd", "Onderweg", "Afgerond"];
 const driverOptions = ["Erwin", "Julian", "Gerben", "Hans", "Fiona"];
 
+// --- Helper Functies ---
 function useWindowWidth() {
   const getWidth = () => (typeof window !== "undefined" ? window.innerWidth : 1200);
   const [windowWidth, setWindowWidth] = useState(getWidth);
-
   useEffect(() => {
     function handleResize() {
       setWindowWidth(getWidth());
     }
-
     handleResize();
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, []);
-
   return windowWidth;
 }
 
@@ -42,31 +84,183 @@ function formatDate(dateString) {
 
 function addMinutesToTimeString(timeString, minutesToAdd) {
   if (!timeString || !timeString.includes(":")) return "";
-
   const [hours, minutes] = timeString.split(":").map(Number);
   if (Number.isNaN(hours) || Number.isNaN(minutes)) return "";
-
   const totalMinutes = hours * 60 + minutes + minutesToAdd;
   const normalizedMinutes = ((totalMinutes % 1440) + 1440) % 1440;
-  const newHours = Math.floor(normalizedMinutes / 60);
-  const newMinutes = normalizedMinutes % 60;
-
-  return `${String(newHours).padStart(2, "0")}:${String(newMinutes).padStart(2, "0")}`;
+  return `${String(Math.floor(normalizedMinutes / 60)).padStart(2, "0")}:${String(
+    normalizedMinutes % 60
+  ).padStart(2, "0")}`;
 }
 
-function getRideStatusStyle(status) {
-  switch (status) {
-    case "Gepland":
-      return { background: "#f3e8ff", color: "#7c3aed", border: "1px solid #ddd6fe" };
-    case "Bevestigd":
-      return { background: "#dcfce7", color: "#166534", border: "1px solid #bbf7d0" };
-    case "Onderweg":
-      return { background: "#dbeafe", color: "#1d4ed8", border: "1px solid #bfdbfe" };
-    case "Afgerond":
-      return { background: "#e5e7eb", color: "#374151", border: "1px solid #d1d5db" };
-    default:
-      return { background: "#f3f4f6", color: "#111827", border: "1px solid #e5e7eb" };
+function isTimeOnTime(plannedTime, actualTime, graceMinutes = 5) {
+  if (!plannedTime || !actualTime) return false;
+  const [pH, pM] = plannedTime.split(":").map(Number);
+  const [aH, aM] = actualTime.split(":").map(Number);
+  const pTotal = pH * 60 + pM;
+  const aTotal = aH * 60 + aM;
+  return aTotal <= pTotal + graceMinutes;
+}
+
+// Genereert een Apple Maps link op iOS/Mac, en Google Maps voor Android/Windows
+function getMapUrl(address) {
+  if (!address) return "#";
+  const encodedAddress = encodeURIComponent(address);
+  const isApple = typeof navigator !== 'undefined' && /iPhone|iPad|iPod|Macintosh/i.test(navigator.userAgent);
+  
+  if (isApple) {
+    return `http://maps.apple.com/?q=${encodedAddress}`;
+  } else {
+    return `https://www.google.com/maps/search/?api=1&query=${encodedAddress}`;
   }
+}
+
+function getRideStatusStyle(status, isDark) {
+  if (isDark) {
+    switch (status) {
+      case "Gepland":
+        return { background: "rgba(124, 58, 237, 0.2)", color: "#c4b5fd", border: "1px solid rgba(124, 58, 237, 0.5)" };
+      case "Bevestigd":
+        return { background: "rgba(22, 101, 52, 0.3)", color: "#86efac", border: "1px solid rgba(22, 101, 52, 0.6)" };
+      case "Onderweg":
+        return { background: "rgba(29, 78, 216, 0.3)", color: "#93c5fd", border: "1px solid rgba(29, 78, 216, 0.6)" };
+      case "Afgerond":
+        return { background: "rgba(55, 65, 81, 0.5)", color: "#d1d5db", border: "1px solid rgba(55, 65, 81, 0.8)" };
+      default:
+        return { background: "#334155", color: "#f8fafc", border: "1px solid #475569" };
+    }
+  } else {
+    switch (status) {
+      case "Gepland":
+        return { background: "#f3e8ff", color: "#7c3aed", border: "1px solid #ddd6fe" };
+      case "Bevestigd":
+        return { background: "#dcfce7", color: "#166534", border: "1px solid #bbf7d0" };
+      case "Onderweg":
+        return { background: "#dbeafe", color: "#1d4ed8", border: "1px solid #bfdbfe" };
+      case "Afgerond":
+        return { background: "#e5e7eb", color: "#374151", border: "1px solid #d1d5db" };
+      default:
+        return { background: "#f3f4f6", color: "#111827", border: "1px solid #e5e7eb" };
+    }
+  }
+}
+
+// --- Dynamische Stijl Functies ---
+const getLabelStyle = (theme) => ({
+  display: "flex",
+  flexDirection: "column",
+  gap: 8,
+  color: theme.textMain,
+  fontSize: 14,
+  fontWeight: 700,
+  transition: "color 0.3s ease",
+});
+
+const getInputStyle = (theme) => ({
+  width: "100%",
+  boxSizing: "border-box",
+  padding: "14px 15px",
+  borderRadius: 14,
+  border: `1px solid ${theme.inputBorder}`,
+  background: theme.inputBg,
+  fontSize: 15,
+  outline: "none",
+  color: theme.textMain,
+  fontFamily: "Arial, sans-serif",
+  transition: "all 0.3s ease",
+});
+
+const getPrimaryButtonStyle = (theme) => ({
+  background: theme.primaryBtnBg,
+  color: theme.primaryBtnText,
+  border: "none",
+  borderRadius: 14,
+  padding: "12px 16px",
+  fontWeight: 800,
+  fontSize: 14,
+  cursor: "pointer",
+  transition: "all 0.3s ease",
+});
+
+const getSecondaryButtonStyle = (theme) => ({
+  background: theme.secondaryBtnBg,
+  color: theme.secondaryBtnText,
+  border: `1px solid ${theme.border}`,
+  borderRadius: 14,
+  padding: "12px 16px",
+  fontWeight: 800,
+  fontSize: 14,
+  cursor: "pointer",
+  transition: "all 0.3s ease",
+});
+
+const getTabStyle = (isActive, theme) => ({
+  padding: "14px 20px",
+  fontSize: 15,
+  fontWeight: 800,
+  color: isActive ? theme.textMain : theme.textMuted,
+  borderBottom: isActive ? `3px solid ${theme.primaryBtnBg}` : "3px solid transparent",
+  background: "none",
+  borderTop: "none",
+  borderLeft: "none",
+  borderRight: "none",
+  cursor: "pointer",
+  transition: "all 0.3s ease",
+});
+
+const darkGhostButtonStyle = {
+  background: "transparent",
+  color: "white",
+  border: "1px solid rgba(255,255,255,0.22)",
+  borderRadius: 14,
+  padding: "12px 16px",
+  fontWeight: 800,
+  fontSize: 14,
+  cursor: "pointer",
+  transition: "all 0.3s ease",
+};
+
+// --- Componenten ---
+function DarkModeToggle() {
+  const { theme, toggleTheme } = useContext(ThemeContext);
+  return (
+    <button
+      onClick={toggleTheme}
+      title="Wissel Dark Mode"
+      style={{
+        width: 56,
+        height: 30,
+        borderRadius: 30,
+        background: theme.isDark ? "#334155" : "rgba(255,255,255,0.2)",
+        border: theme.isDark ? "1px solid #475569" : "1px solid rgba(255,255,255,0.4)",
+        position: "relative",
+        cursor: "pointer",
+        padding: 0,
+        display: "flex",
+        alignItems: "center",
+        transition: "all 0.3s ease",
+      }}
+    >
+      <div
+        style={{
+          width: 24,
+          height: 24,
+          borderRadius: "50%",
+          background: "white",
+          position: "absolute",
+          left: theme.isDark ? 28 : 4,
+          transition: "left 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275)",
+          display: "flex",
+          justifyContent: "center",
+          alignItems: "center",
+          boxShadow: "0 2px 4px rgba(0,0,0,0.2)",
+          fontSize: 14,
+        }}
+      >
+        {theme.isDark ? "🌙" : "☀️"}
+      </div>
+    </button>
+  );
 }
 
 function Badge({ children, style }) {
@@ -79,6 +273,7 @@ function Badge({ children, style }) {
         padding: "6px 10px",
         fontSize: 12,
         fontWeight: 800,
+        transition: "all 0.3s ease",
         ...style,
       }}
     >
@@ -88,19 +283,157 @@ function Badge({ children, style }) {
 }
 
 function StatCard({ title, value, sub }) {
+  const { theme } = useContext(ThemeContext);
   return (
     <div
       style={{
-        background: "white",
+        background: theme.cardBg,
         borderRadius: 22,
         padding: 20,
-        border: "1px solid #e5e7eb",
-        boxShadow: "0 10px 24px rgba(17,24,39,0.05)",
+        border: `1px solid ${theme.border}`,
+        boxShadow: theme.shadow,
+        transition: "all 0.3s ease",
       }}
     >
-      <div style={{ color: "#6b7280", fontSize: 14, marginBottom: 8 }}>{title}</div>
-      <div style={{ color: "#111827", fontWeight: 900, fontSize: 34 }}>{value}</div>
-      <div style={{ color: "#9ca3af", fontSize: 13, marginTop: 6 }}>{sub}</div>
+      <div style={{ color: theme.textMuted, fontSize: 14, marginBottom: 8, transition: "color 0.3s ease" }}>
+        {title}
+      </div>
+      <div style={{ color: theme.textMain, fontWeight: 900, fontSize: 34, transition: "color 0.3s ease" }}>
+        {value}
+      </div>
+      <div style={{ color: theme.textMuted, fontSize: 13, marginTop: 6, transition: "color 0.3s ease" }}>
+        {sub}
+      </div>
+    </div>
+  );
+}
+
+function StatisticsDashboard({ rides }) {
+  const { theme } = useContext(ThemeContext);
+  const isMobile = useWindowWidth() < 700;
+
+  const totalRides = rides.length;
+  const completedRides = rides.filter((r) => r.status === "Afgerond").length;
+  const completionRate = totalRides > 0 ? Math.round((completedRides / totalRides) * 100) : 0;
+
+  const driverStats = driverOptions.map((driver) => ({
+    name: driver,
+    count: rides.filter((r) => r.driver_name === driver).length,
+  }));
+  const maxDriverCount = Math.max(...driverStats.map((d) => d.count), 1);
+  const statusCounts = rideStatuses.map((status) => ({
+    status,
+    count: rides.filter((r) => r.status === status).length,
+  }));
+
+  // Echte OTP Calculatie
+  const otpRides = rides.filter((r) => r.status === "Afgerond" && r.arrival_time && r.actual_arrival_time);
+  const onTimeCount = otpRides.filter((r) => isTimeOnTime(r.arrival_time, r.actual_arrival_time)).length;
+  const otp = otpRides.length > 0 ? Math.round((onTimeCount / otpRides.length) * 100) : 0;
+  const dashArray = `${otp}, 100`;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 24, animation: "fadeIn 0.5s ease" }}>
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(3, 1fr)", gap: 16 }}>
+        <StatCard title="Totaal Gepland" value={totalRides} sub="Actieve ritten in de database" />
+        <StatCard
+          title="Voltooiingspercentage"
+          value={`${completionRate}%`}
+          sub={`${completedRides} van de ${totalRides} afgerond`}
+        />
+
+        <div
+          style={{
+            background: theme.cardBg,
+            borderRadius: 22,
+            padding: 20,
+            border: `1px solid ${theme.border}`,
+            boxShadow: theme.shadow,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            transition: "all 0.3s ease",
+          }}
+        >
+          <div>
+            <div style={{ color: theme.textMuted, fontSize: 14, marginBottom: 8 }}>On-Time Performance</div>
+            <div style={{ color: theme.textMain, fontWeight: 900, fontSize: 34 }}>{otp}%</div>
+            <div style={{ color: theme.textMuted, fontSize: 11, marginTop: 6, maxWidth: 140 }}>
+              {otpRides.length > 0 ? `Gemeten over ${otpRides.length} afgeronde ritten` : "Onvoldoende data voor berekening"}
+            </div>
+          </div>
+          <div style={{ position: "relative", width: 70, height: 70 }}>
+            <svg viewBox="0 0 36 36" style={{ width: "100%", height: "100%", transform: "rotate(-90deg)" }}>
+              <path
+                d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                fill="none"
+                stroke={theme.chartBg}
+                strokeWidth="3"
+              />
+              <path
+                d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                fill="none"
+                stroke={otp >= 90 ? "#10b981" : otp >= 75 ? "#f59e0b" : "#ef4444"}
+                strokeWidth="3"
+                strokeDasharray={dashArray}
+                style={{ transition: "stroke-dasharray 1s ease-out, stroke 1s ease" }}
+              />
+            </svg>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "2fr 1fr", gap: 24 }}>
+        <div style={{ background: theme.cardBg, borderRadius: 24, border: `1px solid ${theme.border}`, padding: 24, boxShadow: theme.shadow }}>
+          <h3 style={{ margin: "0 0 20px 0", color: theme.textMain }}>Werkdruk per Chauffeur</h3>
+          <div style={{ display: "flex", alignItems: "flex-end", gap: isMobile ? 12 : 24, height: 200, paddingTop: 20 }}>
+            {driverStats.map((stat) => {
+              const heightPct = (stat.count / maxDriverCount) * 100;
+              return (
+                <div key={stat.name} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+                  <div style={{ color: theme.textMain, fontWeight: 800, fontSize: 13 }}>{stat.count}</div>
+                  <div style={{ width: "100%", maxWidth: 50, background: theme.chartBg, borderRadius: "6px 6px 0 0", height: "100%", position: "relative", overflow: "hidden" }}>
+                    <div
+                      style={{
+                        position: "absolute",
+                        bottom: 0,
+                        left: 0,
+                        right: 0,
+                        background: theme.chartBar,
+                        height: `${heightPct}%`,
+                        transition: "height 0.8s cubic-bezier(0.4, 0, 0.2, 1)",
+                        borderRadius: "6px 6px 0 0",
+                      }}
+                    />
+                  </div>
+                  <div style={{ color: theme.textMuted, fontSize: 12, fontWeight: 700 }}>{stat.name}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div style={{ background: theme.cardBg, borderRadius: 24, border: `1px solid ${theme.border}`, padding: 24, boxShadow: theme.shadow }}>
+          <h3 style={{ margin: "0 0 20px 0", color: theme.textMain }}>Status Overzicht</h3>
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            {statusCounts.map((stat) => {
+              const pct = totalRides > 0 ? Math.round((stat.count / totalRides) * 100) : 0;
+              const colorObj = getRideStatusStyle(stat.status, theme.isDark);
+              return (
+                <div key={stat.status}>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, fontSize: 13, fontWeight: 700, color: theme.textMain }}>
+                    <span>{stat.status}</span>
+                    <span>{stat.count} ({pct}%)</span>
+                  </div>
+                  <div style={{ width: "100%", height: 10, background: theme.chartBg, borderRadius: 5, overflow: "hidden" }}>
+                    <div style={{ width: `${pct}%`, height: "100%", background: colorObj.color, transition: "width 0.8s ease" }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -108,7 +441,7 @@ function StatCard({ title, value, sub }) {
 function AuthScreen() {
   const windowWidth = useWindowWidth();
   const isMobile = windowWidth < 900;
-
+  const { theme } = useContext(ThemeContext);
   const [mode, setMode] = useState("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -121,19 +454,12 @@ function AuthScreen() {
     setLoading(true);
     setError("");
     setMessage("");
-
     try {
       if (mode === "signin") {
-        const { error } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
       } else {
-        const { error } = await supabase.auth.signUp({
-          email,
-          password,
-        });
+        const { error } = await supabase.auth.signUp({ email, password });
         if (error) throw error;
         setMessage("Account aangemaakt. Je kunt nu inloggen.");
         setMode("signin");
@@ -145,143 +471,74 @@ function AuthScreen() {
     }
   }
 
-  return (
-    <div
-      style={{
-        minHeight: "100vh",
-        background: "linear-gradient(135deg, #0f172a 0%, #111827 60%, #1f2937 100%)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: isMobile ? 16 : 24,
-        fontFamily: "Arial, sans-serif",
-      }}
-    >
-      <div
-        style={{
-          width: "100%",
-          maxWidth: 980,
-          display: "grid",
-          gridTemplateColumns: isMobile ? "1fr" : "1.1fr 0.9fr",
-          gap: 24,
-        }}
-      >
-        <div
-          style={{
-            color: "white",
-            padding: isMobile ? 24 : 36,
-            borderRadius: 28,
-            border: "1px solid rgba(255,255,255,0.12)",
-            background: "rgba(255,255,255,0.06)",
-            backdropFilter: "blur(10px)",
-          }}
-        >
-          <div
-            style={{
-              width: 76,
-              height: 76,
-              borderRadius: 22,
-              background: "white",
-              color: "#111827",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontSize: 32,
-              fontWeight: 900,
-              marginBottom: 24,
-            }}
-          >
-            D
-          </div>
+  const authBg = theme.isDark
+    ? "linear-gradient(135deg, #0f172a 0%, #111827 60%, #1f2937 100%)"
+    : "linear-gradient(135deg, #2563eb 0%, #1d4ed8 60%, #1e40af 100%)";
 
+  return (
+    <div style={{ minHeight: "100vh", background: authBg, display: "flex", alignItems: "center", justifyContent: "center", padding: isMobile ? 16 : 24, fontFamily: "Arial, sans-serif", transition: "background 0.5s ease" }}>
+      <div style={{ width: "100%", maxWidth: 980, display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1.1fr 0.9fr", gap: 24 }}>
+        
+        {/* Linker Kant met het Logo */}
+        <div style={{ color: "white", padding: isMobile ? 24 : 36, borderRadius: 28, border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.06)", backdropFilter: "blur(10px)", transition: "all 0.3s ease" }}>
+          
+          <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 30 }}>
+            <div style={{ width: 76, height: 76, borderRadius: 22, background: "white", color: "#111827", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 32, fontWeight: 900, boxShadow: "0 10px 24px rgba(17,24,39,0.2)", flexShrink: 0 }}>
+              TP
+            </div>
+            <div style={{ color: "white", fontSize: isMobile ? 32 : 42, fontWeight: 900, textTransform: "uppercase", letterSpacing: "0.05em", transition: "all 0.3s ease" }}>
+              TYREPOINT
+            </div>
+          </div>
+          
           <h1 style={{ margin: 0, fontSize: isMobile ? 36 : 46, lineHeight: 1.05 }}>Transport Planner</h1>
-          <p style={{ color: "#cbd5e1", fontSize: isMobile ? 16 : 18, lineHeight: 1.6, marginTop: 18, maxWidth: 520 }}>
-            Echte login, gedeelde planning en ritten die online worden opgeslagen.
+          <p style={{ color: "rgba(255,255,255,0.8)", fontSize: isMobile ? 16 : 18, lineHeight: 1.6, marginTop: 18, maxWidth: 520 }}>
+            Een centraal en veilig platform voor efficiënte transportplanning, realtime rittenbeheer en prestatie-analyse.
           </p>
         </div>
 
-        <div
-          style={{
-            background: "white",
-            borderRadius: 28,
-            padding: isMobile ? 24 : 34,
-            boxShadow: "0 24px 60px rgba(0,0,0,0.18)",
-          }}
-        >
-          <div style={{ fontSize: isMobile ? 26 : 30, fontWeight: 900, color: "#111827", marginBottom: 8 }}>
+        {/* Rechter Kant met het Formulier */}
+        <div style={{ background: theme.isDark ? "#1e293b" : "#f1f5f9", borderRadius: 28, padding: isMobile ? 24 : 34, boxShadow: theme.shadow, transition: "all 0.3s ease" }}>
+          <div style={{ fontSize: isMobile ? 26 : 30, fontWeight: 900, color: theme.textMain, marginBottom: 8, transition: "color 0.3s ease" }}>
             {mode === "signin" ? "Inloggen" : "Account aanmaken"}
           </div>
-          <div style={{ color: "#6b7280", marginBottom: 22 }}>
-            Maak eerst jouw 3 accounts aan. Daarna kun je nieuwe aanmeldingen weer uitzetten in Supabase.
+          <div style={{ color: theme.textMuted, marginBottom: 22, transition: "color 0.3s ease" }}>
+            {mode === "signin"
+              ? "Vul je e-mailadres en wachtwoord in om toegang te krijgen tot de planning."
+              : "Vul je gegevens in om een veilig account aan te maken voor het beheer van de ritten."}
           </div>
-
+          
           <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-            <label style={labelStyle}>
-              E-mailadres
-              <input
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                type="email"
-                style={inputStyle}
-              />
+            <label style={getLabelStyle(theme)}>
+              E-mailadres 
+              <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" style={getInputStyle(theme)} />
             </label>
-
-            <label style={labelStyle}>
-              Wachtwoord
-              <input
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                type="password"
-                style={inputStyle}
-              />
+            <label style={getLabelStyle(theme)}>
+              Wachtwoord 
+              <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" style={getInputStyle(theme)} />
             </label>
-
-            <button type="submit" style={primaryButtonStyle} disabled={loading}>
+            <button type="submit" style={getPrimaryButtonStyle(theme)} disabled={loading}>
               {loading ? "Bezig..." : mode === "signin" ? "Inloggen" : "Account aanmaken"}
             </button>
           </form>
 
-          {message ? (
-            <div
-              style={{
-                marginTop: 14,
-                background: "#ecfdf5",
-                color: "#166534",
-                border: "1px solid #bbf7d0",
-                borderRadius: 14,
-                padding: "12px 14px",
-                fontWeight: 700,
-              }}
-            >
+          {message && (
+            <div style={{ marginTop: 14, background: theme.isDark ? "rgba(22,101,52,0.3)" : "#ecfdf5", color: theme.isDark ? "#86efac" : "#166534", border: theme.isDark ? "1px solid rgba(22,101,52,0.5)" : "1px solid #bbf7d0", borderRadius: 14, padding: "12px 14px", fontWeight: 700 }}>
               {message}
             </div>
-          ) : null}
-
-          {error ? (
-            <div
-              style={{
-                marginTop: 14,
-                background: "#fef2f2",
-                color: "#b91c1c",
-                border: "1px solid #fecaca",
-                borderRadius: 14,
-                padding: "12px 14px",
-                fontWeight: 700,
-              }}
-            >
+          )}
+          
+          {error && (
+            <div style={{ marginTop: 14, background: theme.isDark ? "rgba(185,28,28,0.3)" : "#fef2f2", color: theme.isDark ? "#fca5a5" : "#b91c1c", border: theme.isDark ? "1px solid rgba(185,28,28,0.5)" : "1px solid #fecaca", borderRadius: 14, padding: "12px 14px", fontWeight: 700 }}>
               {error}
             </div>
-          ) : null}
-
+          )}
+          
           <div style={{ marginTop: 18 }}>
             <button
               type="button"
-              onClick={() => {
-                setMode(mode === "signin" ? "signup" : "signin");
-                setMessage("");
-                setError("");
-              }}
-              style={secondaryButtonStyle}
+              onClick={() => { setMode(mode === "signin" ? "signup" : "signin"); setMessage(""); setError(""); }}
+              style={getSecondaryButtonStyle(theme)}
             >
               {mode === "signin" ? "Nieuw account maken" : "Terug naar inloggen"}
             </button>
@@ -292,9 +549,10 @@ function AuthScreen() {
   );
 }
 
-function RideEditor({ selectedRide, onSave, onDelete, onNew, saving }) {
+function RideEditor({ selectedRide, onSave, onDelete, onNew, saving, onShift }) {
   const windowWidth = useWindowWidth();
   const isSmall = windowWidth < 700;
+  const { theme } = useContext(ThemeContext);
 
   function createFormState(ride) {
     return {
@@ -303,6 +561,7 @@ function RideEditor({ selectedRide, onSave, onDelete, onNew, saving }) {
       ride_date: ride?.ride_date || "",
       departure_time: ride?.departure_time || "",
       arrival_time: ride?.arrival_time || "",
+      actual_arrival_time: ride?.actual_arrival_time || "",
       pickup_location: ride?.pickup_location || "",
       delivery_location: ride?.delivery_location || "",
       cargo: ride?.cargo || "",
@@ -313,6 +572,7 @@ function RideEditor({ selectedRide, onSave, onDelete, onNew, saving }) {
 
   const [formData, setFormData] = useState(createFormState(selectedRide));
   const [isReturnDraft, setIsReturnDraft] = useState(false);
+  const [shiftMinutes, setShiftMinutes] = useState(30);
 
   useEffect(() => {
     setFormData(createFormState(selectedRide));
@@ -320,323 +580,215 @@ function RideEditor({ selectedRide, onSave, onDelete, onNew, saving }) {
   }, [selectedRide]);
 
   function updateField(field, value) {
-    setFormData((prev) => ({ ...prev, [field]: value }));
+    setFormData((prev) => {
+      const updates = { [field]: value };
+      
+      // Auto-vul echte aankomsttijd
+      if (field === "status" && value === "Afgerond" && prev.status !== "Afgerond" && !prev.actual_arrival_time) {
+        const nu = new Date();
+        updates.actual_arrival_time = `${String(nu.getHours()).padStart(2, "0")}:${String(nu.getMinutes()).padStart(2, "0")}`;
+      }
+      return { ...prev, ...updates };
+    });
   }
 
   function handleSubmit(e) {
     e.preventDefault();
-
-    if (
-      !formData.ride_date ||
-      !formData.departure_time ||
-      !formData.pickup_location.trim() ||
-      !formData.delivery_location.trim()
-    ) {
-      alert("Vul datum, vertrektijd, van-locatie en naar-locatie in.");
-      return;
+    if (!formData.ride_date || !formData.departure_time || !formData.pickup_location.trim() || !formData.delivery_location.trim()) {
+      return alert("Vul datum, vertrektijd, van-locatie en naar-locatie in.");
     }
-
     onSave({
-      id: formData.id,
-      driver_name: formData.driver_name,
-      ride_date: formData.ride_date,
-      departure_time: formData.departure_time,
-      arrival_time: formData.arrival_time,
+      ...formData,
       pickup_location: formData.pickup_location.trim(),
       delivery_location: formData.delivery_location.trim(),
       cargo: formData.cargo.trim(),
-      notes: formData.notes.trim(),
-      status: formData.status,
+      notes: formData.notes.trim()
     });
   }
 
   function handleCreateReturnRide() {
     if (!selectedRide) return;
-
-    const returnDepartureTime = addMinutesToTimeString(formData.arrival_time, 15);
-
     setFormData({
+      ...formData,
       id: null,
-      driver_name: formData.driver_name,
-      ride_date: formData.ride_date,
-      departure_time: returnDepartureTime,
+      departure_time: addMinutesToTimeString(formData.arrival_time, 15),
       arrival_time: "",
+      actual_arrival_time: "",
       pickup_location: formData.delivery_location || "",
       delivery_location: formData.pickup_location || "",
       cargo: "",
       notes: "",
-      status: "Gepland",
+      status: "Gepland"
     });
-
     setIsReturnDraft(true);
   }
 
   const isEditingOriginalRide = Boolean(selectedRide?.id) && !isReturnDraft;
 
   return (
-    <div
-      style={{
-        background: "white",
-        borderRadius: 24,
-        border: "1px solid #e5e7eb",
-        boxShadow: "0 10px 24px rgba(17,24,39,0.05)",
-        padding: isSmall ? 18 : 22,
-        position: windowWidth < 1000 ? "static" : "sticky",
-        top: 98,
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          gap: 10,
-          alignItems: isSmall ? "flex-start" : "center",
-          flexDirection: isSmall ? "column" : "row",
-          marginBottom: 16,
-        }}
-      >
+    <div style={{ background: theme.cardBg, borderRadius: 24, border: `1px solid ${theme.border}`, boxShadow: theme.shadow, padding: isSmall ? 18 : 22, position: windowWidth < 1000 ? "static" : "sticky", top: 98, transition: "all 0.3s ease" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: isSmall ? "flex-start" : "center", flexDirection: isSmall ? "column" : "row", marginBottom: 16 }}>
         <div>
-          <div style={{ fontSize: 22, fontWeight: 900, color: "#111827" }}>
+          <div style={{ fontSize: 22, fontWeight: 900, color: theme.textMain, transition: "color 0.3s ease" }}>
             {isEditingOriginalRide ? "Rit bewerken" : isReturnDraft ? "Nieuwe retour rit" : "Nieuwe rit"}
           </div>
-          <div style={{ color: "#6b7280", marginTop: 4 }}>
-            {isEditingOriginalRide
-              ? "Pas de geselecteerde rit aan."
-              : isReturnDraft
-              ? "Controleer de retour rit en sla deze op."
-              : "Voeg direct een nieuwe rit toe."}
+          <div style={{ color: theme.textMuted, marginTop: 4, transition: "color 0.3s ease" }}>
+            {isEditingOriginalRide ? "Pas de geselecteerde rit aan." : isReturnDraft ? "Controleer de retour rit en sla deze op." : "Voeg direct een nieuwe rit toe."}
           </div>
         </div>
-
-        {isEditingOriginalRide ? (
-          <button type="button" onClick={onNew} style={secondaryButtonStyle}>
+        {isEditingOriginalRide && (
+          <button type="button" onClick={onNew} style={getSecondaryButtonStyle(theme)}>
             Nieuwe rit
           </button>
-        ) : null}
+        )}
       </div>
-
+      
       <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-        <label style={labelStyle}>
-          Chauffeur
-          <select
-            value={formData.driver_name}
-            onChange={(e) => updateField("driver_name", e.target.value)}
-            style={inputStyle}
-          >
-            {driverOptions.map((driver) => (
-              <option key={driver} value={driver}>
-                {driver}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: isSmall ? "1fr" : "1fr 1fr",
-            gap: 12,
-          }}
-        >
-          <label style={labelStyle}>
-            Datum
-            <input
-              type="date"
-              value={formData.ride_date}
-              onChange={(e) => updateField("ride_date", e.target.value)}
-              style={inputStyle}
-            />
-          </label>
-
-          <label style={labelStyle}>
-            Status
-            <select
-              value={formData.status}
-              onChange={(e) => updateField("status", e.target.value)}
-              style={inputStyle}
-            >
-              {rideStatuses.map((status) => (
-                <option key={status} value={status}>
-                  {status}
-                </option>
-              ))}
+        <div style={{ display: "grid", gridTemplateColumns: isSmall ? "1fr" : "1fr 1fr", gap: 12 }}>
+          <label style={getLabelStyle(theme)}>
+            Chauffeur 
+            <select value={formData.driver_name} onChange={(e) => updateField("driver_name", e.target.value)} style={getInputStyle(theme)}>
+              {driverOptions.map((driver) => <option key={driver} value={driver}>{driver}</option>)}
             </select>
           </label>
-        </div>
-
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: isSmall ? "1fr" : "1fr 1fr",
-            gap: 12,
-          }}
-        >
-          <label style={labelStyle}>
-            Vertrektijd
-            <input
-              type="time"
-              value={formData.departure_time}
-              onChange={(e) => updateField("departure_time", e.target.value)}
-              style={inputStyle}
-            />
-          </label>
-
-          <label style={labelStyle}>
-            Aankomsttijd
-            <input
-              type="time"
-              value={formData.arrival_time}
-              onChange={(e) => updateField("arrival_time", e.target.value)}
-              style={inputStyle}
-            />
+          <label style={getLabelStyle(theme)}>
+            Datum 
+            <input type="date" value={formData.ride_date} onChange={(e) => updateField("ride_date", e.target.value)} style={getInputStyle(theme)} />
           </label>
         </div>
 
-        <label style={labelStyle}>
-          Van locatie
-          <input
-            type="text"
-            value={formData.pickup_location}
-            onChange={(e) => updateField("pickup_location", e.target.value)}
-            placeholder="Bijv. Amsterdam"
-            style={inputStyle}
-          />
-        </label>
+        <div style={{ display: "grid", gridTemplateColumns: isSmall ? "1fr" : "1fr 1fr", gap: 12 }}>
+          <label style={getLabelStyle(theme)}>
+            Vertrektijd 
+            <input type="time" value={formData.departure_time} onChange={(e) => updateField("departure_time", e.target.value)} style={getInputStyle(theme)} />
+          </label>
+          <label style={getLabelStyle(theme)}>
+            Geplande Aankomst 
+            <input type="time" value={formData.arrival_time} onChange={(e) => updateField("arrival_time", e.target.value)} style={getInputStyle(theme)} />
+          </label>
+        </div>
 
-        <label style={labelStyle}>
-          Naar locatie
-          <input
-            type="text"
-            value={formData.delivery_location}
-            onChange={(e) => updateField("delivery_location", e.target.value)}
-            placeholder="Bijv. Rotterdam"
-            style={inputStyle}
-          />
-        </label>
+        <div style={{ display: "grid", gridTemplateColumns: isSmall ? "1fr" : "1fr 1fr", gap: 12 }}>
+          <label style={getLabelStyle(theme)}>
+            Status 
+            <select value={formData.status} onChange={(e) => updateField("status", e.target.value)} style={getInputStyle(theme)}>
+              {rideStatuses.map((status) => <option key={status} value={status}>{status}</option>)}
+            </select>
+          </label>
+          <label style={getLabelStyle(theme)}>
+            Echte Aankomsttijd 
+            <input 
+              type="time" 
+              value={formData.actual_arrival_time} 
+              onChange={(e) => updateField("actual_arrival_time", e.target.value)} 
+              style={{ 
+                ...getInputStyle(theme), 
+                background: formData.status === "Afgerond" ? (theme.isDark ? "rgba(16, 185, 129, 0.1)" : "#ecfdf5") : theme.inputBg, 
+                border: formData.status === "Afgerond" ? "1px solid #10b981" : `1px solid ${theme.inputBorder}` 
+              }} 
+            />
+          </label>
+        </div>
 
-        <label style={labelStyle}>
-          Kenteken of chassisnummer
-          <input
-            type="text"
-            value={formData.cargo}
-            onChange={(e) => updateField("cargo", e.target.value)}
-            placeholder="Bijv. V-123-AB of WVWZZZ..."
-            style={inputStyle}
-          />
+        <label style={getLabelStyle(theme)}>
+          Van locatie 
+          <input type="text" value={formData.pickup_location} onChange={(e) => updateField("pickup_location", e.target.value)} placeholder="Bijv. Amsterdam" style={getInputStyle(theme)} />
         </label>
-
-        <label style={labelStyle}>
-          Notities
-          <textarea
-            value={formData.notes}
-            onChange={(e) => updateField("notes", e.target.value)}
-            placeholder="Extra instructies of opmerkingen"
-            style={{ ...inputStyle, minHeight: 110, resize: "vertical" }}
-          />
+        <label style={getLabelStyle(theme)}>
+          Naar locatie 
+          <input type="text" value={formData.delivery_location} onChange={(e) => updateField("delivery_location", e.target.value)} placeholder="Bijv. Rotterdam" style={getInputStyle(theme)} />
         </label>
-
+        <label style={getLabelStyle(theme)}>
+          Kenteken/Lading 
+          <input type="text" value={formData.cargo} onChange={(e) => updateField("cargo", e.target.value)} placeholder="Bijv. V-123-AB" style={getInputStyle(theme)} />
+        </label>
+        <label style={getLabelStyle(theme)}>
+          Notities 
+          <textarea value={formData.notes} onChange={(e) => updateField("notes", e.target.value)} placeholder="Extra instructies" style={{ ...getInputStyle(theme), minHeight: 90, resize: "vertical" }} />
+        </label>
+        
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <button type="submit" style={primaryButtonStyle} disabled={saving}>
-            {saving
-              ? "Opslaan..."
-              : isEditingOriginalRide
-              ? "Wijzigingen opslaan"
-              : isReturnDraft
-              ? "Retour rit opslaan"
-              : "Rit opslaan"}
+          <button type="submit" style={getPrimaryButtonStyle(theme)} disabled={saving}>
+            {saving ? "Opslaan..." : isEditingOriginalRide ? "Wijzigen" : isReturnDraft ? "Retour opslaan" : "Rit opslaan"}
           </button>
-
-          {isEditingOriginalRide ? (
+          
+          {isEditingOriginalRide && (
             <>
-              <button type="button" onClick={handleCreateReturnRide} disabled={saving} style={secondaryButtonStyle}>
+              <button type="button" onClick={handleCreateReturnRide} disabled={saving} style={getSecondaryButtonStyle(theme)}>
                 Retour
               </button>
-
-              <button
-                type="button"
-                onClick={() => onDelete(selectedRide.id)}
-                disabled={saving}
-                style={{
-                  background: "#fee2e2",
-                  color: "#b91c1c",
-                  border: "1px solid #fecaca",
-                  borderRadius: 14,
-                  padding: "12px 16px",
-                  fontWeight: 800,
-                  cursor: "pointer",
+              <button 
+                type="button" 
+                onClick={() => onDelete(selectedRide.id)} 
+                disabled={saving} 
+                style={{ 
+                  background: theme.isDark ? "rgba(185, 28, 28, 0.2)" : "#fee2e2", 
+                  color: theme.isDark ? "#fca5a5" : "#b91c1c", 
+                  border: theme.isDark ? "1px solid rgba(185, 28, 28, 0.4)" : "1px solid #fecaca", 
+                  borderRadius: 14, 
+                  padding: "12px 16px", 
+                  fontWeight: 800, 
+                  cursor: "pointer", 
+                  transition: "all 0.3s ease" 
                 }}
               >
                 Verwijderen
               </button>
             </>
-          ) : null}
+          )}
         </div>
+
+        {isEditingOriginalRide && (
+          <div style={{ marginTop: 16, paddingTop: 16, borderTop: `1px dashed ${theme.border}`, display: "flex", flexDirection: "column", gap: 10, transition: "border-color 0.3s ease" }}>
+            <div style={{ color: theme.textMain, fontSize: 13, fontWeight: 700, transition: "color 0.3s ease" }}>
+              Bulk tijden opschuiven (vanaf deze rit)
+            </div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <input type="number" value={shiftMinutes} onChange={(e) => setShiftMinutes(Number(e.target.value))} style={{ ...getInputStyle(theme), width: 80, padding: "10px 12px" }} />
+              <span style={{ fontSize: 13, color: theme.textMuted, transition: "color 0.3s ease" }}>min.</span>
+              <button type="button" disabled={saving || !onShift} onClick={() => onShift(selectedRide.driver_name, selectedRide.ride_date, selectedRide.departure_time, shiftMinutes)} style={{ ...getSecondaryButtonStyle(theme), padding: "10px 14px", background: theme.isDark ? "#334155" : "#f3f4f6" }}>
+                Verschuiven
+              </button>
+            </div>
+          </div>
+        )}
       </form>
     </div>
   );
 }
 
 function RideCardsMobile({ rides, selectedRideId, onSelectRide }) {
+  const { theme } = useContext(ThemeContext);
+  const locationLinkStyle = { color: theme.isDark ? "#60a5fa" : "#2563eb", textDecoration: "none", fontWeight: 700 };
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       {rides.length === 0 ? (
-        <div
-          style={{
-            background: "white",
-            borderRadius: 20,
-            border: "1px solid #e5e7eb",
-            padding: 20,
-            textAlign: "center",
-            color: "#6b7280",
-          }}
-        >
-          Geen ritten gevonden binnen deze filters.
+        <div style={{ background: theme.cardBg, borderRadius: 20, border: `1px solid ${theme.border}`, padding: 20, textAlign: "center", color: theme.textMuted }}>
+          Geen ritten gevonden.
         </div>
       ) : (
         rides.map((ride) => {
           const selected = selectedRideId === ride.id;
-
+          const isCompleted = ride.status === "Afgerond" && ride.actual_arrival_time;
           return (
-            <button
-              key={ride.id}
-              type="button"
-              onClick={() => onSelectRide(ride)}
-              style={{
-                width: "100%",
-                textAlign: "left",
-                background: selected ? "#eff6ff" : "white",
-                border: selected ? "1px solid #bfdbfe" : "1px solid #e5e7eb",
-                borderRadius: 20,
-                padding: 16,
-                cursor: "pointer",
-                boxShadow: "0 10px 24px rgba(17,24,39,0.05)",
-              }}
-            >
+            <button key={ride.id} type="button" onClick={() => onSelectRide(ride)} style={{ width: "100%", textAlign: "left", background: selected ? theme.rowSelected : theme.cardBg, border: selected ? `1px solid ${theme.rowSelectedBorder}` : `1px solid ${theme.border}`, borderRadius: 20, padding: 16, cursor: "pointer", boxShadow: theme.shadow, transition: "all 0.3s ease" }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start" }}>
                 <div>
-                  <div style={{ fontWeight: 900, color: "#111827", fontSize: 15 }}>{formatDate(ride.ride_date)}</div>
-                  <div style={{ color: "#4b5563", marginTop: 4, fontWeight: 700 }}>
-                    {ride.departure_time} → {ride.arrival_time || "—"}
+                  <div style={{ fontWeight: 900, color: theme.textMain, fontSize: 15 }}>{formatDate(ride.ride_date)}</div>
+                  <div style={{ color: theme.textMuted, marginTop: 4, fontWeight: 700 }}>
+                    {ride.departure_time} → {isCompleted ? <span style={{ color: "#10b981" }}>{ride.actual_arrival_time}</span> : (ride.arrival_time || "—")}
                   </div>
                 </div>
-
-                <Badge style={getRideStatusStyle(ride.status)}>{ride.status}</Badge>
+                <Badge style={getRideStatusStyle(ride.status, theme.isDark)}>{ride.status}</Badge>
               </div>
-
-              <div style={{ marginTop: 12, color: "#111827", fontWeight: 800 }}>{ride.driver_name}</div>
-
-              <div style={{ marginTop: 10, color: "#374151", fontSize: 14, lineHeight: 1.5 }}>
+              <div style={{ marginTop: 12, color: theme.textMain, fontWeight: 800 }}>{ride.driver_name}</div>
+              <div style={{ marginTop: 10, color: theme.textMuted, fontSize: 14, lineHeight: 1.5 }}>
                 <div>
-                  <strong>Van:</strong> {ride.pickup_location || "—"}
+                  <strong>Van:</strong> <a href={getMapUrl(ride.pickup_location)} target="_blank" rel="noreferrer" style={locationLinkStyle} onClick={(e) => e.stopPropagation()}>{ride.pickup_location || "—"}</a>
                 </div>
                 <div style={{ marginTop: 4 }}>
-                  <strong>Naar:</strong> {ride.delivery_location || "—"}
-                </div>
-                <div style={{ marginTop: 4 }}>
-                  <strong>Vervoer:</strong> {ride.cargo || "—"}
-                </div>
-                <div style={{ marginTop: 4 }}>
-                  <strong>Notities:</strong> {ride.notes || "—"}
+                  <strong>Naar:</strong> <a href={getMapUrl(ride.delivery_location)} target="_blank" rel="noreferrer" style={locationLinkStyle} onClick={(e) => e.stopPropagation()}>{ride.delivery_location || "—"}</a>
                 </div>
               </div>
             </button>
@@ -647,103 +799,43 @@ function RideCardsMobile({ rides, selectedRideId, onSelectRide }) {
   );
 }
 
-function RideTable({
-  rides,
-  selectedRideId,
-  onSelectRide,
-  search,
-  setSearch,
-  statusFilter,
-  setStatusFilter,
-  driverFilter,
-  setDriverFilter,
-  dateFilter,
-  setDateFilter,
-  clearFilters,
-}) {
+function RideTable({ rides, selectedRideId, onSelectRide, search, setSearch, statusFilter, setStatusFilter, driverFilter, setDriverFilter, dateFilter, setDateFilter, clearFilters }) {
   const windowWidth = useWindowWidth();
   const isNarrow = windowWidth < 900;
   const isMobileCards = windowWidth < 700;
+  const { theme } = useContext(ThemeContext);
+
+  const thStyle = { padding: "14px 16px", fontSize: 13, fontWeight: 800, color: theme.textMuted };
+  const tdStyle = { padding: "14px 16px", verticalAlign: "middle", color: theme.textMain, fontSize: 14 };
+  const locationLinkStyle = { color: theme.isDark ? "#60a5fa" : "#2563eb", textDecoration: "none", fontWeight: 700 };
 
   return (
-    <div
-      style={{
-        background: "white",
-        borderRadius: 24,
-        border: "1px solid #e5e7eb",
-        boxShadow: "0 10px 24px rgba(17,24,39,0.05)",
-        overflow: "hidden",
-      }}
-    >
-      <div style={{ padding: 20, borderBottom: "1px solid #e5e7eb" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-          <div>
-            <div style={{ fontSize: 22, fontWeight: 900, color: "#111827" }}>Planning</div>
-            <div style={{ color: "#6b7280", marginTop: 4 }}>Centrale rittenlijst.</div>
-          </div>
-
-          <div style={{ color: "#6b7280", fontWeight: 800 }}>{rides.length} ritten zichtbaar</div>
-        </div>
-
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: isNarrow ? "1fr" : "1.4fr 1fr 1fr 1fr auto",
-            gap: 12,
-            marginTop: 18,
-          }}
-        >
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Zoek op locatie, kenteken, chassisnummer of notities..."
-            style={inputStyle}
-          />
-
-          <select value={driverFilter} onChange={(e) => setDriverFilter(e.target.value)} style={inputStyle}>
+    <div style={{ background: theme.cardBg, borderRadius: 24, border: `1px solid ${theme.border}`, boxShadow: theme.shadow, overflow: "hidden", transition: "all 0.3s ease" }}>
+      <div style={{ padding: 20, borderBottom: `1px solid ${theme.border}`, transition: "border-color 0.3s ease" }}>
+        <div style={{ display: "grid", gridTemplateColumns: isNarrow ? "1fr" : "1.4fr 1fr 1fr 1fr auto", gap: 12 }}>
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Zoek op locatie of notities..." style={getInputStyle(theme)} />
+          <select value={driverFilter} onChange={(e) => setDriverFilter(e.target.value)} style={getInputStyle(theme)}>
             <option value="all">Alle chauffeurs</option>
-            {driverOptions.map((driver) => (
-              <option key={driver} value={driver}>
-                {driver}
-              </option>
-            ))}
+            {driverOptions.map((driver) => <option key={driver} value={driver}>{driver}</option>)}
           </select>
-
-          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={inputStyle}>
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={getInputStyle(theme)}>
             <option value="all">Alle statussen</option>
-            {rideStatuses.map((status) => (
-              <option key={status} value={status}>
-                {status}
-              </option>
-            ))}
+            {rideStatuses.map((status) => <option key={status} value={status}>{status}</option>)}
           </select>
-
-          <input
-            type="date"
-            value={dateFilter}
-            onChange={(e) => setDateFilter(e.target.value)}
-            style={inputStyle}
-          />
-
-          <button type="button" onClick={clearFilters} style={secondaryButtonStyle}>
-            Wissen
-          </button>
+          <input type="date" value={dateFilter} onChange={(e) => setDateFilter(e.target.value)} style={getInputStyle(theme)} />
+          <button type="button" onClick={clearFilters} style={getSecondaryButtonStyle(theme)}>Wissen</button>
         </div>
       </div>
-
+      
       {isMobileCards ? (
-        <div style={{ padding: 12, background: "#f9fafb" }}>
-          <RideCardsMobile
-            rides={rides}
-            selectedRideId={selectedRideId}
-            onSelectRide={onSelectRide}
-          />
+        <div style={{ padding: 12, background: theme.bg }}>
+          <RideCardsMobile rides={rides} selectedRideId={selectedRideId} onSelectRide={onSelectRide} />
         </div>
       ) : (
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1180 }}>
             <thead>
-              <tr style={{ background: "#f9fafb", color: "#6b7280", textAlign: "left" }}>
+              <tr style={{ background: theme.tableHeaderBg, textAlign: "left" }}>
                 <th style={thStyle}>Datum</th>
                 <th style={thStyle}>Tijd</th>
                 <th style={thStyle}>Chauffeur</th>
@@ -754,51 +846,38 @@ function RideTable({
                 <th style={thStyle}>Notities</th>
               </tr>
             </thead>
-
             <tbody>
               {rides.length === 0 ? (
                 <tr>
-                  <td colSpan={8} style={{ padding: 24, textAlign: "center", color: "#6b7280" }}>
-                    Geen ritten gevonden binnen deze filters.
+                  <td colSpan={8} style={{ padding: 24, textAlign: "center", color: theme.textMuted }}>
+                    Geen ritten gevonden.
                   </td>
                 </tr>
               ) : (
                 rides.map((ride) => {
                   const selected = selectedRideId === ride.id;
-
+                  const isCompleted = ride.status === "Afgerond" && ride.actual_arrival_time;
                   return (
-                    <tr
-                      key={ride.id}
-                      onClick={() => onSelectRide(ride)}
-                      style={{
-                        background: selected ? "#eff6ff" : "white",
-                        cursor: "pointer",
-                        borderTop: "1px solid #e5e7eb",
-                      }}
-                    >
+                    <tr key={ride.id} onClick={() => onSelectRide(ride)} style={{ background: selected ? theme.rowSelected : "transparent", cursor: "pointer", borderTop: `1px solid ${theme.border}`, transition: "background 0.3s ease" }}>
                       <td style={tdStyle}>{formatDate(ride.ride_date)}</td>
                       <td style={tdStyle}>
-                        <div style={{ fontWeight: 800, color: "#111827" }}>
-                          {ride.departure_time} → {ride.arrival_time}
+                        <div style={{ fontWeight: 800, color: theme.textMain }}>
+                          {ride.departure_time} → {isCompleted ? <span style={{ color: "#10b981" }} title="Echte aankomsttijd">{ride.actual_arrival_time}</span> : ride.arrival_time}
                         </div>
                       </td>
                       <td style={tdStyle}>{ride.driver_name}</td>
-                      <td style={tdStyle}>{ride.pickup_location || "—"}</td>
-                      <td style={tdStyle}>{ride.delivery_location || "—"}</td>
-                      <td style={tdStyle}>{ride.cargo}</td>
                       <td style={tdStyle}>
-                        <Badge style={getRideStatusStyle(ride.status)}>{ride.status}</Badge>
+                        <a href={getMapUrl(ride.pickup_location)} target="_blank" rel="noreferrer" style={locationLinkStyle} onClick={(e) => e.stopPropagation()}>{ride.pickup_location || "—"}</a>
                       </td>
                       <td style={tdStyle}>
-                        <div
-                          style={{
-                            maxWidth: 220,
-                            whiteSpace: "nowrap",
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                            color: "#4b5563",
-                          }}
-                        >
+                        <a href={getMapUrl(ride.delivery_location)} target="_blank" rel="noreferrer" style={locationLinkStyle} onClick={(e) => e.stopPropagation()}>{ride.delivery_location || "—"}</a>
+                      </td>
+                      <td style={tdStyle}>{ride.cargo}</td>
+                      <td style={tdStyle}>
+                        <Badge style={getRideStatusStyle(ride.status, theme.isDark)}>{ride.status}</Badge>
+                      </td>
+                      <td style={tdStyle}>
+                        <div style={{ maxWidth: 220, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: theme.textMuted }}>
                           {ride.notes || "—"}
                         </div>
                       </td>
@@ -818,7 +897,9 @@ function Dashboard({ session }) {
   const windowWidth = useWindowWidth();
   const isTabletOrSmaller = windowWidth < 1000;
   const isPhone = windowWidth < 600;
+  const { theme } = useContext(ThemeContext);
 
+  const [activeTab, setActiveTab] = useState("planning");
   const [rides, setRides] = useState([]);
   const [selectedRideId, setSelectedRideId] = useState(null);
   const [search, setSearch] = useState("");
@@ -830,346 +911,209 @@ function Dashboard({ session }) {
 
   async function loadRides() {
     setLoading(true);
-    const { data, error } = await supabase
-      .from("rides")
-      .select("*")
-      .order("ride_date", { ascending: true })
-      .order("departure_time", { ascending: true });
-
+    const { data, error } = await supabase.from("rides").select("*").order("ride_date", { ascending: true }).order("departure_time", { ascending: true });
     if (!error) {
-      const sorted = sortRides(data || []);
+      const sorted = sortRides(data || []); 
       setRides(sorted);
-      if (sorted.length && !selectedRideId) {
-        setSelectedRideId(sorted[0].id);
-      }
+      if (sorted.length && !selectedRideId) setSelectedRideId(sorted[0].id);
     } else {
       alert(error.message);
     }
     setLoading(false);
   }
 
-  useEffect(() => {
-    loadRides();
+  useEffect(() => { 
+    loadRides(); 
   }, []);
 
   async function saveRide(ride) {
     setSaving(true);
-
-    if (ride.id) {
-      const { data, error } = await supabase
-        .from("rides")
-        .update({
-          driver_name: ride.driver_name,
-          ride_date: ride.ride_date,
-          departure_time: ride.departure_time,
-          arrival_time: ride.arrival_time,
-          pickup_location: ride.pickup_location,
-          delivery_location: ride.delivery_location,
-          cargo: ride.cargo,
-          notes: ride.notes,
-          status: ride.status,
-        })
-        .eq("id", ride.id)
-        .select()
-        .single();
-
-      if (error) {
-        alert(error.message);
-      } else if (data) {
-        setRides((prev) => sortRides(prev.map((r) => (r.id === data.id ? data : r))));
-        setSelectedRideId(data.id);
-      }
-    } else {
-      const { data, error } = await supabase
-        .from("rides")
-        .insert({
-          driver_name: ride.driver_name,
-          ride_date: ride.ride_date,
-          departure_time: ride.departure_time,
-          arrival_time: ride.arrival_time,
-          pickup_location: ride.pickup_location,
-          delivery_location: ride.delivery_location,
-          cargo: ride.cargo,
-          notes: ride.notes,
-          status: ride.status,
-        })
-        .select()
-        .single();
-
-      if (error) {
-        alert(error.message);
-      } else if (data) {
-        setRides((prev) => sortRides([...prev, data]));
-        setSelectedRideId(data.id);
-      }
+    const apiCall = ride.id ? supabase.from("rides").update(ride).eq("id", ride.id) : supabase.from("rides").insert(ride);
+    const { data, error } = await apiCall.select().single();
+    
+    if (error) {
+      alert(error.message);
+    } else if (data) { 
+      setRides((prev) => sortRides(ride.id ? prev.map((r) => (r.id === data.id ? data : r)) : [...prev, data])); 
+      setSelectedRideId(data.id); 
     }
-
     setSaving(false);
   }
 
   async function deleteRide(rideId) {
-    const ok = window.confirm("Weet je zeker dat je deze rit wilt verwijderen?");
-    if (!ok) return;
-
+    if (!window.confirm("Weet je zeker dat je deze rit wilt verwijderen?")) return;
     setSaving(true);
     const { error } = await supabase.from("rides").delete().eq("id", rideId);
-
+    
     if (error) {
       alert(error.message);
-    } else {
-      setRides((prev) => prev.filter((r) => r.id !== rideId));
-      setSelectedRideId(null);
+    } else { 
+      setRides((prev) => prev.filter((r) => r.id !== rideId)); 
+      setSelectedRideId(null); 
     }
     setSaving(false);
   }
 
-  async function signOut() {
-    await supabase.auth.signOut();
+  async function shiftSubsequentRides(driver_name, ride_date, from_time, minutesToAdd) {
+    if (!minutesToAdd || minutesToAdd === 0) return;
+    const ridesToShift = rides.filter((r) => r.driver_name === driver_name && r.ride_date === ride_date && r.departure_time >= from_time);
+    if (ridesToShift.length === 0) return alert("Geen ritten gevonden.");
+    if (!window.confirm(`Weet je zeker dat je ${ridesToShift.length} rit(ten) wilt opschuiven?`)) return;
+    
+    setSaving(true);
+    try {
+      await Promise.all(
+        ridesToShift.map((r) => 
+          supabase.from("rides").update({ 
+            departure_time: addMinutesToTimeString(r.departure_time, minutesToAdd), 
+            arrival_time: r.arrival_time ? addMinutesToTimeString(r.arrival_time, minutesToAdd) : "" 
+          }).eq("id", r.id)
+        )
+      );
+      await loadRides();
+    } catch (err) { 
+      alert("Fout bij opschuiven."); 
+    } finally { 
+      setSaving(false); 
+    }
   }
 
-  function newRide() {
-    setSelectedRideId(null);
+  async function signOut() { 
+    await supabase.auth.signOut(); 
+  }
+  
+  function newRide() { 
+    setSelectedRideId(null); 
   }
 
   const filteredRides = useMemo(() => {
     const q = search.trim().toLowerCase();
     const today = new Date().toISOString().slice(0, 10);
-
     return rides.filter((ride) => {
-      const isPastCompletedRide =
-        !dateFilter &&
-        ride.status === "Afgerond" &&
-        ride.ride_date < today;
-
-      if (isPastCompletedRide) {
-        return false;
-      }
-
-      const matchesSearch =
-        !q ||
-        ride.cargo.toLowerCase().includes(q) ||
-        (ride.notes || "").toLowerCase().includes(q) ||
-        (ride.pickup_location || "").toLowerCase().includes(q) ||
-        (ride.delivery_location || "").toLowerCase().includes(q) ||
-        ride.ride_date.toLowerCase().includes(q) ||
-        ride.departure_time.toLowerCase().includes(q) ||
-        ride.arrival_time.toLowerCase().includes(q) ||
-        ride.driver_name.toLowerCase().includes(q);
-
+      if (!dateFilter && ride.status === "Afgerond" && ride.ride_date < today) return false;
+      const matchesSearch = !q || (ride.pickup_location || "").toLowerCase().includes(q) || (ride.delivery_location || "").toLowerCase().includes(q) || ride.driver_name.toLowerCase().includes(q);
       const matchesStatus = statusFilter === "all" || ride.status === statusFilter;
       const matchesDriver = driverFilter === "all" || ride.driver_name === driverFilter;
       const matchesDate = !dateFilter || ride.ride_date === dateFilter;
-
       return matchesSearch && matchesStatus && matchesDriver && matchesDate;
     });
   }, [rides, search, statusFilter, driverFilter, dateFilter]);
 
-  const selectedRide =
-    filteredRides.find((ride) => ride.id === selectedRideId) ||
-    rides.find((ride) => ride.id === selectedRideId) ||
-    null;
-
-  const today = new Date().toISOString().slice(0, 10);
-  const todayRides = rides.filter((r) => r.ride_date === today).length;
-  const inProgress = rides.filter((r) => r.status === "Onderweg").length;
-  const completed = rides.filter((r) => r.status === "Afgerond").length;
+  const selectedRide = filteredRides.find((r) => r.id === selectedRideId) || rides.find((r) => r.id === selectedRideId) || null;
 
   return (
-    <div style={{ minHeight: "100vh", background: "#f3f4f6", fontFamily: "Arial, sans-serif" }}>
-      <header
-        style={{
-          position: "sticky",
-          top: 0,
-          zIndex: 30,
-          background: "#0f172a",
-          color: "white",
-          borderBottom: "1px solid rgba(255,255,255,0.08)",
-        }}
-      >
-        <div
-          style={{
-            maxWidth: 1500,
-            margin: "0 auto",
-            padding: isPhone ? "16px" : "18px 24px",
-            display: "flex",
-            justifyContent: "space-between",
-            gap: 16,
-            alignItems: "center",
-            flexWrap: "wrap",
-          }}
-        >
-          <div>
-            <div style={{ fontSize: isPhone ? 24 : 30, fontWeight: 900 }}>Transport Planner</div>
-            <div style={{ color: "#cbd5e1", marginTop: 6, wordBreak: "break-word" }}>
-              Ingelogd als {session.user.email}
+    <div style={{ minHeight: "100vh", background: theme.bg, fontFamily: "Arial, sans-serif", transition: "background 0.3s ease" }}>
+      <header style={{ position: "sticky", top: 0, zIndex: 30, background: "#0f172a", color: "white", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
+        <div style={{ maxWidth: 1500, margin: "0 auto", padding: isPhone ? "16px" : "18px 24px", display: "flex", justifyContent: "space-between", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
+          
+          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+            <div style={{ width: 36, height: 36, borderRadius: 10, background: "white", color: "#0f172a", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, fontWeight: 900, flexShrink: 0 }}>
+              TP
+            </div>
+            <div>
+              <div style={{ fontSize: isPhone ? 24 : 30, fontWeight: 900 }}>Transport Planner</div>
+              <div style={{ color: "#cbd5e1", marginTop: 6, transition: "color 0.3s ease" }}>Ingelogd als {session.user.email}</div>
             </div>
           </div>
-
-          <button type="button" onClick={signOut} style={darkGhostButtonStyle}>
-            Uitloggen
-          </button>
+          
+          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+            <DarkModeToggle />
+            <button type="button" onClick={signOut} style={darkGhostButtonStyle}>Uitloggen</button>
+          </div>
         </div>
       </header>
 
       <main style={{ maxWidth: 1500, margin: "0 auto", padding: isPhone ? 16 : 24 }}>
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: isPhone ? "1fr" : isTabletOrSmaller ? "repeat(2,1fr)" : "repeat(4,1fr)",
-            gap: 16,
-            marginBottom: 24,
-          }}
-        >
-          <StatCard title="Totaal ritten" value={rides.length} sub="Live database" />
-          <StatCard title="Ritten vandaag" value={todayRides} sub="Op basis van vandaag" />
-          <StatCard title="Onderweg" value={inProgress} sub="Nu actief" />
-          <StatCard title="Afgerond" value={completed} sub="Voltooide ritten" />
+        <div style={{ display: "flex", gap: 8, marginBottom: 24, borderBottom: `2px solid ${theme.border}`, overflowX: "auto" }}>
+          <button onClick={() => setActiveTab("planning")} style={getTabStyle(activeTab === "planning", theme)}>📋 Planning</button>
+          <button onClick={() => setActiveTab("statistics")} style={getTabStyle(activeTab === "statistics", theme)}>📊 Statistieken</button>
         </div>
 
         {loading ? (
-          <div style={{ background: "white", padding: 24, borderRadius: 24, border: "1px solid #e5e7eb" }}>
-            Laden...
-          </div>
+          <div style={{ background: theme.cardBg, padding: 24, borderRadius: 24, color: theme.textMain }}>Laden...</div>
+        ) : activeTab === "statistics" ? (
+          <StatisticsDashboard rides={rides} />
         ) : (
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: isTabletOrSmaller ? "1fr" : "minmax(0,1fr) 420px",
-              gap: 24,
-              alignItems: "start",
-            }}
-          >
-            <RideTable
-              rides={filteredRides}
-              selectedRideId={selectedRideId}
-              onSelectRide={(ride) => setSelectedRideId(ride.id)}
-              search={search}
-              setSearch={setSearch}
-              statusFilter={statusFilter}
-              setStatusFilter={setStatusFilter}
-              driverFilter={driverFilter}
-              setDriverFilter={setDriverFilter}
-              dateFilter={dateFilter}
-              setDateFilter={setDateFilter}
-              clearFilters={() => {
-                setSearch("");
-                setStatusFilter("all");
-                setDriverFilter("all");
-                setDateFilter("");
-              }}
+          <div style={{ display: "grid", gridTemplateColumns: isTabletOrSmaller ? "1fr" : "minmax(0,1fr) 420px", gap: 24, alignItems: "start", animation: "fadeIn 0.5s ease" }}>
+            <RideTable 
+              rides={filteredRides} 
+              selectedRideId={selectedRideId} 
+              onSelectRide={(r) => setSelectedRideId(r.id)} 
+              search={search} 
+              setSearch={setSearch} 
+              statusFilter={statusFilter} 
+              setStatusFilter={setStatusFilter} 
+              driverFilter={driverFilter} 
+              setDriverFilter={setDriverFilter} 
+              dateFilter={dateFilter} 
+              setDateFilter={setDateFilter} 
+              clearFilters={() => { setSearch(""); setStatusFilter("all"); setDriverFilter("all"); setDateFilter(""); }} 
             />
-
-            <RideEditor
-              selectedRide={selectedRide}
-              onSave={saveRide}
-              onDelete={deleteRide}
-              onNew={newRide}
-              saving={saving}
+            <RideEditor 
+              selectedRide={selectedRide} 
+              onSave={saveRide} 
+              onDelete={deleteRide} 
+              onNew={newRide} 
+              saving={saving} 
+              onShift={shiftSubsequentRides} 
             />
           </div>
         )}
       </main>
+      <style>{`@keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }`}</style>
     </div>
   );
 }
 
-const labelStyle = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 8,
-  color: "#374151",
-  fontSize: 14,
-  fontWeight: 700,
-};
-
-const inputStyle = {
-  width: "100%",
-  boxSizing: "border-box",
-  padding: "14px 15px",
-  borderRadius: 14,
-  border: "1px solid #d1d5db",
-  background: "white",
-  fontSize: 15,
-  outline: "none",
-  color: "#111827",
-  fontFamily: "Arial, sans-serif",
-};
-
-const primaryButtonStyle = {
-  background: "#111827",
-  color: "white",
-  border: "none",
-  borderRadius: 14,
-  padding: "12px 16px",
-  fontWeight: 800,
-  fontSize: 14,
-  cursor: "pointer",
-};
-
-const secondaryButtonStyle = {
-  background: "white",
-  color: "#111827",
-  border: "1px solid #d1d5db",
-  borderRadius: 14,
-  padding: "12px 16px",
-  fontWeight: 800,
-  fontSize: 14,
-  cursor: "pointer",
-};
-
-const darkGhostButtonStyle = {
-  background: "transparent",
-  color: "white",
-  border: "1px solid rgba(255,255,255,0.22)",
-  borderRadius: 14,
-  padding: "12px 16px",
-  fontWeight: 800,
-  fontSize: 14,
-  cursor: "pointer",
-};
-
-const thStyle = {
-  padding: "14px 16px",
-  fontSize: 13,
-  fontWeight: 800,
-};
-
-const tdStyle = {
-  padding: "14px 16px",
-  verticalAlign: "middle",
-  color: "#374151",
-  fontSize: 14,
-};
-
-function App() {
+function MainApp() {
   const [session, setSession] = useState(null);
   const [checkingSession, setCheckingSession] = useState(true);
+  const { theme } = useContext(ThemeContext);
+
+  useEffect(() => { 
+    document.body.style.backgroundColor = theme.bg; 
+    document.body.style.transition = "background-color 0.3s ease"; 
+  }, [theme.bg]);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session ?? null);
-      setCheckingSession(false);
+    supabase.auth.getSession().then(({ data }) => { 
+      setSession(data.session ?? null); 
+      setCheckingSession(false); 
     });
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session ?? null);
-      setCheckingSession(false);
+    
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => { 
+      setSession(session ?? null); 
+      setCheckingSession(false); 
     });
-
+    
     return () => subscription.unsubscribe();
   }, []);
 
-  if (checkingSession) {
-    return <div style={{ padding: 24, fontFamily: "Arial, sans-serif" }}>Laden...</div>;
-  }
-
-  if (!session) {
-    return <AuthScreen />;
-  }
-
+  if (checkingSession) return <div style={{ padding: 24, color: theme.textMain, background: theme.bg, minHeight: "100vh" }}>Laden...</div>;
+  if (!session) return <AuthScreen />;
+  
   return <Dashboard session={session} />;
 }
 
-export default App;
+export default function App() {
+  const [isDarkMode, setIsDarkMode] = useState(() => {
+    if (typeof window !== "undefined") return localStorage.getItem("theme") === "dark";
+    return false;
+  });
+
+  const toggleTheme = () => {
+    setIsDarkMode((prev) => {
+      const nextTheme = !prev;
+      localStorage.setItem("theme", nextTheme ? "dark" : "light");
+      return nextTheme;
+    });
+  };
+
+  const currentTheme = isDarkMode ? darkTheme : lightTheme;
+  
+  return (
+    <ThemeContext.Provider value={{ theme: currentTheme, toggleTheme }}>
+      <MainApp />
+    </ThemeContext.Provider>
+  );
+}
