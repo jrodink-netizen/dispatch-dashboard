@@ -176,7 +176,81 @@ function exportCompletedRidesToExcel(rides) {
   XLSX.writeFile(workbook, `afgeronde-ritten-${fileDate}.xlsx`);
 }
 
-// --- Dynamische Stijl Functies (Compacter voor de Editor) ---
+function exportRideToWord(ride) {
+  if (!ride) return;
+
+  const datum = new Date(ride.ride_date).toLocaleDateString('nl-NL', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+  const notities = ride.notes ? ride.notes.replace(/\n/g, '<br/>') : "Geen verdere bijzonderheden.";
+
+  const htmlTemplate = `
+    <html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+    <head>
+      <meta charset='utf-8'>
+      <title>Werkkaart</title>
+      <style>
+        @page { margin: 2cm; }
+        body { font-family: 'Segoe UI', Arial, sans-serif; color: #111827; }
+        .header { text-align: center; border-bottom: 3px solid #111827; padding-bottom: 10px; margin-bottom: 20px; }
+        .logo { font-size: 28px; font-weight: 900; letter-spacing: 2px; margin-bottom: 4px; }
+        .subtitle { font-size: 14px; color: #4b5563; text-transform: uppercase; letter-spacing: 1px; }
+        .section-title { font-size: 16px; font-weight: bold; color: #111827; border-bottom: 1px solid #d1d5db; padding-bottom: 4px; margin-top: 20px; margin-bottom: 10px; }
+        table { width: 100%; border-collapse: collapse; margin-bottom: 15px; }
+        th, td { border: 1px solid #d1d5db; padding: 10px; text-align: left; vertical-align: top; font-size: 14px; }
+        th { background-color: #f3f4f6; width: 35%; color: #374151; font-weight: bold; }
+        .notes-box { border: 1px solid #d1d5db; padding: 15px; background-color: #f9fafb; min-height: 120px; font-size: 14px; line-height: 1.5; }
+      </style>
+    </head>
+    <body>
+      <div class='header'>
+        <div class='logo'>TYREPOINT</div>
+        <div class='subtitle'>Transport Werkkaart</div>
+      </div>
+      
+      <div class='section-title'>Algemene Gegevens</div>
+      <table>
+        <tr><th>Datum</th><td>${datum}</td></tr>
+        <tr><th>Chauffeur</th><td><strong>${ride.driver_name}</strong></td></tr>
+      </table>
+
+      <div class='section-title'>Ritinformatie & Locaties</div>
+      <table>
+        <tr><th>Gepland Vertrek</th><td>${ride.departure_time || "--:--"}</td></tr>
+        <tr><th>Ophaallocatie (Van)</th><td style="font-size: 15px;"><strong>${ride.pickup_location || "Niet ingevuld"}</strong></td></tr>
+        <tr><th>Geplande Aankomst</th><td>${ride.arrival_time || "--:--"}</td></tr>
+        <tr><th>Afleverlocatie (Naar)</th><td style="font-size: 15px;"><strong>${ride.delivery_location || "Niet ingevuld"}</strong></td></tr>
+      </table>
+
+      <div class='section-title'>Vracht & Details</div>
+      <table>
+        <tr><th>Kenteken / Lading</th><td>${ride.cargo || "Geen specifieke vrachtgegevens vermeld"}</td></tr>
+      </table>
+      
+      <div class='section-title'>Instructies / Notities</div>
+      <div class='notes-box'>
+        ${notities}
+      </div>
+    </body>
+    </html>
+  `;
+
+  const blob = new Blob(['\ufeff', htmlTemplate], { type: 'application/msword' });
+  const url = 'data:application/vnd.ms-word;charset=utf-8,' + encodeURIComponent(htmlTemplate);
+  const filename = `Werkkaart_${ride.driver_name}_${ride.ride_date}.doc`;
+  
+  const downloadLink = document.createElement("a");
+  document.body.appendChild(downloadLink);
+  
+  if (navigator.msSaveOrOpenBlob) {
+    navigator.msSaveOrOpenBlob(blob, filename);
+  } else {
+    downloadLink.href = url;
+    downloadLink.download = filename;
+    downloadLink.click();
+  }
+  document.body.removeChild(downloadLink);
+}
+
+// --- Dynamische Stijl Functies ---
 const getLabelStyle = (theme) => ({
   display: "flex", flexDirection: "column", gap: 6, color: theme.textMain, fontSize: 13, fontWeight: 700, transition: "color 0.3s ease",
 });
@@ -382,10 +456,19 @@ function RideEditor({ selectedRide, onSave, onDelete, onNew, saving, onShift }) 
   const { theme } = useContext(ThemeContext);
 
   function createFormState(ride) {
+    const vandaag = new Date().toISOString().slice(0, 10);
     return {
-      id: ride?.id || null, driver_name: ride?.driver_name || driverOptions[0], ride_date: ride?.ride_date || "",
-      departure_time: ride?.departure_time || "", arrival_time: ride?.arrival_time || "", actual_arrival_time: ride?.actual_arrival_time || "",
-      pickup_location: ride?.pickup_location || "", delivery_location: ride?.delivery_location || "", cargo: ride?.cargo || "", notes: ride?.notes || "", status: ride?.status || "Gepland",
+      id: ride?.id || null, 
+      driver_name: ride?.driver_name || driverOptions[0], 
+      ride_date: ride?.ride_date || vandaag, 
+      departure_time: ride?.departure_time || "", 
+      arrival_time: ride?.arrival_time || "", 
+      actual_arrival_time: ride?.actual_arrival_time || "",
+      pickup_location: ride?.pickup_location || "", 
+      delivery_location: ride?.delivery_location || "", 
+      cargo: ride?.cargo || "", 
+      notes: ride?.notes || "", 
+      status: ride?.status || "Gepland",
     };
   }
 
@@ -467,6 +550,9 @@ function RideEditor({ selectedRide, onSave, onDelete, onNew, saving, onShift }) 
           {isEditingOriginalRide && (
             <>
               <button type="button" onClick={handleCreateReturnRide} disabled={saving} style={getSecondaryButtonStyle(theme)}>Retour</button>
+              
+              <button type="button" onClick={() => exportRideToWord(selectedRide)} disabled={saving} style={{ ...getSecondaryButtonStyle(theme), background: theme.isDark ? "rgba(59, 130, 246, 0.2)" : "#eff6ff", color: theme.isDark ? "#93c5fd" : "#1d4ed8", border: theme.isDark ? "1px solid rgba(59, 130, 246, 0.4)" : "1px solid #bfdbfe", padding: "10px 14px" }}>📄 Werkkaart</button>
+              
               <button type="button" onClick={() => onDelete(selectedRide.id)} disabled={saving} style={{ background: theme.isDark ? "rgba(185, 28, 28, 0.2)" : "#fee2e2", color: theme.isDark ? "#fca5a5" : "#b91c1c", border: theme.isDark ? "1px solid rgba(185, 28, 28, 0.4)" : "1px solid #fecaca", borderRadius: 10, padding: "10px 14px", fontWeight: 800, cursor: "pointer", transition: "all 0.3s ease" }}>Verwijderen</button>
             </>
           )}
@@ -572,7 +658,6 @@ function RideTable({ rides, selectedRideId, onSelectRide, search, setSearch, sta
                       <td style={tdStyle}>{ride.cargo}</td>
                       <td style={tdStyle}><Badge style={getRideStatusStyle(ride.status, theme.isDark)}>{ride.status}</Badge></td>
                       <td style={tdStyle}>
-                        {/* AANGEPAST: Notities wrappen nu in plaats van afkappen */}
                         <div style={{ minWidth: 150, whiteSpace: "normal", wordWrap: "break-word", color: theme.textMuted, fontSize: 13, lineHeight: 1.4 }}>
                           {ride.notes || "—"}
                         </div>
@@ -605,23 +690,60 @@ function Dashboard({ session }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   
-  // SLIDER STATE: Standaard 70% links (Tabel), 30% rechts (Editor)
   const [leftWidthPct, setLeftWidthPct] = useState(70);
+
+  async function fetchRidesData() {
+    const { data, error } = await supabase
+      .from("rides")
+      .select("*")
+      .order("ride_date", { ascending: true })
+      .order("departure_time", { ascending: true });
+
+    if (!error) {
+      return sortRides(data || []);
+    } else {
+      console.error(error.message);
+      return null;
+    }
+  }
 
   async function loadRides() {
     setLoading(true);
-    const { data, error } = await supabase.from("rides").select("*").order("ride_date", { ascending: true }).order("departure_time", { ascending: true });
-    if (!error) {
-      const sorted = sortRides(data || []);
+    const sorted = await fetchRidesData();
+    if (sorted) {
       setRides(sorted);
-      if (sorted.length && !selectedRideId) setSelectedRideId(sorted[0].id);
-    } else {
-      alert(error.message);
+      if (sorted.length > 0 && !selectedRideId) {
+        setSelectedRideId(sorted[0].id);
+      }
     }
     setLoading(false);
   }
 
-  useEffect(() => { loadRides(); }, []);
+  async function refreshRidesBackground() {
+    const sorted = await fetchRidesData();
+    if (sorted) {
+      setRides(sorted);
+    }
+  }
+
+  useEffect(() => {
+    loadRides(); 
+
+    const rideSubscription = supabase
+      .channel('public-rides-changes')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'rides' },
+        (payload) => {
+          refreshRidesBackground();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(rideSubscription);
+    };
+  }, []);
 
   async function saveRide(ride) {
     setSaving(true);
@@ -690,7 +812,6 @@ function Dashboard({ session }) {
   return (
     <div style={{ minHeight: "100vh", background: theme.bg, fontFamily: "Arial, sans-serif", transition: "background 0.3s ease" }}>
       <header style={{ position: "sticky", top: 0, zIndex: 30, background: "#0f172a", color: "white", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
-        {/* AANGEPAST: max-width 100% voor volledige schermbreedte */}
         <div style={{ maxWidth: "100%", margin: "0 auto", padding: isPhone ? "16px" : "16px 3%", display: "flex", justifyContent: "space-between", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
             <div style={{ width: 36, height: 36, borderRadius: 10, background: "white", color: "#0f172a", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, fontWeight: 900, flexShrink: 0 }}>TP</div>
@@ -706,7 +827,6 @@ function Dashboard({ session }) {
         </div>
       </header>
 
-      {/* AANGEPAST: max-width 100% voor volledige schermbreedte */}
       <main style={{ maxWidth: "100%", margin: "0 auto", padding: isPhone ? 16 : "24px 3%" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24, borderBottom: `2px solid ${theme.border}`, flexWrap: "wrap" }}>
           <div style={{ display: "flex", gap: 8 }}>
@@ -714,7 +834,6 @@ function Dashboard({ session }) {
             <button onClick={() => setActiveTab("statistics")} style={getTabStyle(activeTab === "statistics", theme)}>📊 Statistieken</button>
           </div>
           
-          {/* SLIDER VOOR SCHERMBREEDTE */}
           {!isTabletOrSmaller && activeTab === "planning" && (
             <div style={{ display: "flex", alignItems: "center", gap: 10, paddingBottom: 8 }}>
               <span style={{ fontSize: 13, color: theme.textMuted, fontWeight: 700 }}>↔ Scherm indeling:</span>
@@ -739,7 +858,6 @@ function Dashboard({ session }) {
           <div
             style={{
               display: "grid",
-              // AANGEPAST: Kolombreedte reageert live op de slider!
               gridTemplateColumns: isTabletOrSmaller ? "1fr" : `${leftWidthPct}fr ${100 - leftWidthPct}fr`,
               gap: 24,
               alignItems: "start",
