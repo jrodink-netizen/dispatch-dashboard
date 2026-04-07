@@ -298,42 +298,101 @@ function Badge({ children, style }) {
 function StatCard({ title, value, sub }) {
   const { theme } = useContext(ThemeContext);
   return (
-    <div style={{ background: theme.cardBg, borderRadius: 22, padding: 20, border: `1px solid ${theme.border}`, boxShadow: theme.shadow, transition: "all 0.3s ease" }}>
+    <div style={{ background: theme.cardBg, borderRadius: 22, padding: 20, border: `1px solid ${theme.border}`, boxShadow: theme.shadow, transition: "all 0.3s ease", display: "flex", flexDirection: "column", justifyContent: "center" }}>
       <div style={{ color: theme.textMuted, fontSize: 14, marginBottom: 8, transition: "color 0.3s ease" }}>{title}</div>
-      <div style={{ color: theme.textMain, fontWeight: 900, fontSize: 34, transition: "color 0.3s ease" }}>{value}</div>
+      <div style={{ color: theme.textMain, fontWeight: 900, fontSize: 30, transition: "color 0.3s ease" }}>{value}</div>
       <div style={{ color: theme.textMuted, fontSize: 13, marginTop: 6, transition: "color 0.3s ease" }}>{sub}</div>
     </div>
   );
 }
 
+// ---------------- UITGEBREIDE STATISTIEKEN COMPONENT ----------------
 function StatisticsDashboard({ rides }) {
   const { theme } = useContext(ThemeContext);
   const isMobile = useWindowWidth() < 700;
+  
   const totalRides = rides.length;
   const completedRides = rides.filter((r) => r.status === "Afgerond").length;
   const completionRate = totalRides > 0 ? Math.round((completedRides / totalRides) * 100) : 0;
-  const driverStats = driverOptions.map((driver) => ({ name: driver, count: rides.filter((r) => r.driver_name === driver).length }));
-  const maxDriverCount = Math.max(...driverStats.map((d) => d.count), 1);
-  const statusCounts = rideStatuses.map((status) => ({ status, count: rides.filter((r) => r.status === status).length }));
+  
   const otpRides = rides.filter((r) => r.status === "Afgerond" && r.arrival_time && r.actual_arrival_time);
   const onTimeCount = otpRides.filter((r) => isTimeOnTime(r.arrival_time, r.actual_arrival_time)).length;
   const otp = otpRides.length > 0 ? Math.round((onTimeCount / otpRides.length) * 100) : 0;
   const dashArray = `${otp}, 100`;
 
+  const driverColors = {
+    "Erwin": "#ef4444",   // Rood
+    "Julian": "#3b82f6",  // Blauw
+    "Gerben": "#10b981",  // Groen
+    "Hans": "#f59e0b",    // Oranje
+    "Fiona": "#8b5cf6"    // Paars
+  };
+
+  // Populairste Route
+  const routes = rides.filter(r => r.pickup_location && r.delivery_location).map(r => `${r.pickup_location} → ${r.delivery_location}`);
+  const routeCounts = {};
+  routes.forEach(r => routeCounts[r] = (routeCounts[r] || 0) + 1);
+  const popularRoute = Object.keys(routeCounts).sort((a,b) => routeCounts[b] - routeCounts[a])[0] || "Onvoldoende data";
+  const popularRouteCount = routeCounts[popularRoute] || 0;
+
+  // Data voor 4 Weken Tijdlijn
+  const fourWeeksDates = [];
+  const current = new Date();
+  for (let i = -14; i <= 14; i++) {
+    const d = new Date(current);
+    d.setDate(current.getDate() + i);
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    fourWeeksDates.push(`${yyyy}-${mm}-${dd}`);
+  }
+  const todayString = `${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, '0')}-${String(current.getDate()).padStart(2, '0')}`;
+  
+  // Data voor Gestapelde Grafiek (actieve rijdagen)
+  const dates = [...new Set(rides.map(r => r.ride_date))].sort();
+  const dateCounts = dates.map(date => rides.filter(r => r.ride_date === date).length);
+  const maxPerDay = Math.max(...dateCounts, 0);
+  const busiestDayIndex = dateCounts.indexOf(maxPerDay);
+  const busiestDay = dates[busiestDayIndex] ? formatDate(dates[busiestDayIndex]) : "N/A";
+  
+  const maxRides4Weeks = Math.max(...fourWeeksDates.map(date => rides.filter(r => r.ride_date === date).length), 0);
+
+  // Globale as-maximum zodat verhoudingen altijd kloppen
+  const chartYMax = Math.max(maxPerDay, maxRides4Weeks, 10);
+
+  // Gedetailleerde tabel data per chauffeur
+  const detailedDriverStats = driverOptions.map(driver => {
+    const dRides = rides.filter(r => r.driver_name === driver);
+    const dTotal = dRides.length;
+    const dCompleted = dRides.filter(r => r.status === "Afgerond").length;
+    
+    const dOtpRides = dRides.filter(r => r.status === "Afgerond" && r.arrival_time && r.actual_arrival_time);
+    const dOnTime = dOtpRides.filter(r => isTimeOnTime(r.arrival_time, r.actual_arrival_time)).length;
+    const dOtp = dOtpRides.length > 0 ? Math.round((dOnTime / dOtpRides.length) * 100) : 0;
+
+    return { name: driver, total: dTotal, completed: dCompleted, otp: dOtp, otpCount: dOtpRides.length };
+  });
+
+  const statusCounts = rideStatuses.map((status) => ({ status, count: rides.filter((r) => r.status === status).length }));
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 24, animation: "fadeIn 0.5s ease" }}>
-      <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-        <button type="button" onClick={() => exportCompletedRidesToExcel(rides)} style={getSecondaryButtonStyle(theme)}>Exporteer Excel</button>
+      
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
+        <h2 style={{ margin: 0, color: theme.textMain }}>Dashboard Overzicht</h2>
+        <button type="button" onClick={() => exportCompletedRidesToExcel(rides)} style={getSecondaryButtonStyle(theme)}>Exporteer Data (Excel)</button>
       </div>
+
       <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(3, 1fr)", gap: 16 }}>
-        <StatCard title="Totaal Gepland" value={totalRides} sub="Actieve ritten in de database" />
+        <StatCard title="Totaal Ritten/Auto's" value={totalRides} sub="Actief gepland in het systeem" />
         <StatCard title="Voltooiingspercentage" value={`${completionRate}%`} sub={`${completedRides} van de ${totalRides} afgerond`} />
+        
         <div style={{ background: theme.cardBg, borderRadius: 22, padding: 20, border: `1px solid ${theme.border}`, boxShadow: theme.shadow, display: "flex", alignItems: "center", justifyContent: "space-between", transition: "all 0.3s ease" }}>
           <div>
             <div style={{ color: theme.textMuted, fontSize: 14, marginBottom: 8 }}>On-Time Performance</div>
-            <div style={{ color: theme.textMain, fontWeight: 900, fontSize: 34 }}>{otp}%</div>
+            <div style={{ color: theme.textMain, fontWeight: 900, fontSize: 30 }}>{otp}%</div>
             <div style={{ color: theme.textMuted, fontSize: 11, marginTop: 6, maxWidth: 140 }}>
-              {otpRides.length > 0 ? `Gemeten over ${otpRides.length} afgeronde ritten` : "Onvoldoende data voor berekening"}
+              {otpRides.length > 0 ? `Gemeten over ${otpRides.length} ritten` : "Onvoldoende data"}
             </div>
           </div>
           <div style={{ position: "relative", width: 70, height: 70 }}>
@@ -345,25 +404,108 @@ function StatisticsDashboard({ rides }) {
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "2fr 1fr", gap: 24 }}>
-        <div style={{ background: theme.cardBg, borderRadius: 24, border: `1px solid ${theme.border}`, padding: 24, boxShadow: theme.shadow }}>
-          <h3 style={{ margin: "0 0 20px 0", color: theme.textMain }}>Werkdruk per Chauffeur</h3>
-          <div style={{ display: "flex", alignItems: "flex-end", gap: isMobile ? 12 : 24, height: 200, paddingTop: 20 }}>
-            {driverStats.map((stat) => {
-              const heightPct = (stat.count / maxDriverCount) * 100;
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(2, 1fr)", gap: 16 }}>
+        <StatCard title="Populairste Route" value={popularRoute} sub={popularRouteCount > 0 ? `${popularRouteCount} keer gereden` : "Geen routes gevonden"} />
+        <StatCard title="Drukste Planningsdag" value={busiestDay} sub={maxPerDay > 0 ? `Met een piek van ${maxPerDay} geplande ritten` : "Geen data beschikbaar"} />
+      </div>
+
+      {/* Gestapeld Staafdiagram (Voertuigen per Dag per Chauffeur) */}
+      <div style={{ background: theme.cardBg, borderRadius: 24, border: `1px solid ${theme.border}`, padding: 24, boxShadow: theme.shadow }}>
+        <h3 style={{ margin: "0 0 6px 0", color: theme.textMain }}>Ritten per Dag & Chauffeur</h3>
+        <p style={{ margin: "0 0 20px 0", color: theme.textMuted, fontSize: 13 }}>Dagelijks overzicht van geplande en afgeronde ritten, opgesplitst per chauffeur.</p>
+        
+        <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 24 }}>
+          {driverOptions.map(driver => (
+            <div key={driver} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <div style={{ width: 12, height: 12, borderRadius: 3, background: driverColors[driver] || theme.chartBar }} />
+              <span style={{ fontSize: 13, color: theme.textMuted, fontWeight: 700 }}>{driver}</span>
+            </div>
+          ))}
+        </div>
+
+        {dates.length === 0 ? (
+          <div style={{ color: theme.textMuted, padding: 20, textAlign: "center", background: theme.bg, borderRadius: 12 }}>Geen ritten gevonden om weer te geven.</div>
+        ) : (
+          <div style={{ display: "flex", gap: 12, overflowX: "auto", paddingBottom: 10, height: 240 }}>
+            {dates.map(date => {
+              const dayRides = rides.filter(r => r.ride_date === date);
+              const total = dayRides.length;
+              const heightPct = chartYMax > 0 ? (total / chartYMax) * 100 : 0;
+              
               return (
-                <div key={stat.name} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
-                  <div style={{ color: theme.textMain, fontWeight: 800, fontSize: 13 }}>{stat.count}</div>
-                  <div style={{ width: "100%", maxWidth: 50, background: theme.chartBg, borderRadius: "6px 6px 0 0", height: "100%", position: "relative", overflow: "hidden" }}>
-                    <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, background: theme.chartBar, height: `${heightPct}%`, transition: "height 0.8s cubic-bezier(0.4, 0, 0.2, 1)", borderRadius: "6px 6px 0 0" }} />
+                <div key={date} style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", gap: 8, minWidth: 60, flex: 1, maxWidth: 80, height: "100%" }}>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: theme.textMain }}>{total}</div>
+                  
+                  <div style={{ height: "150px", width: "100%", maxWidth: 45, display: "flex", flexDirection: "column", justifyContent: "flex-end", background: theme.chartBg, borderRadius: 6, overflow: "hidden" }}>
+                    <div style={{ height: `${heightPct}%`, width: "100%", display: "flex", flexDirection: "column", justifyContent: "flex-end", transition: "height 0.8s ease" }}>
+                      {driverOptions.map(driver => {
+                        const count = dayRides.filter(r => r.driver_name === driver).length;
+                        if (count === 0) return null;
+                        
+                        const segmentPct = total > 0 ? (count / total) * 100 : 0; 
+                        return (
+                          <div 
+                            key={driver} 
+                            title={`${driver}: ${count} ritten`}
+                            style={{ 
+                              height: `${segmentPct}%`,
+                              width: "100%", 
+                              background: driverColors[driver] || theme.chartBar,
+                              borderTop: "1px solid rgba(255,255,255,0.2)"
+                            }} 
+                          />
+                        );
+                      })}
+                    </div>
                   </div>
-                  <div style={{ color: theme.textMuted, fontSize: 12, fontWeight: 700 }}>{stat.name}</div>
+                  
+                  <div style={{ fontSize: 11, color: theme.textMuted, fontWeight: 700, textAlign: "center" }}>
+                    {formatDate(date).split(" ")[0]}<br/>{formatDate(date).split(" ")[1]}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "2fr 1fr", gap: 24 }}>
+        
+        {/* Tijdlijn 4 Weken met Dag van de week erbij */}
+        <div style={{ background: theme.cardBg, borderRadius: 24, border: `1px solid ${theme.border}`, padding: 24, boxShadow: theme.shadow }}>
+          <h3 style={{ margin: "0 0 20px 0", color: theme.textMain }}>Tijdlijn: 4 Weken (Ritten per Dag)</h3>
+          
+          <div style={{ display: "flex", gap: isMobile ? 4 : 6, height: 180, paddingTop: 10, overflowX: "auto", paddingBottom: 10 }}>
+            {fourWeeksDates.map((date) => {
+              const count = rides.filter(r => r.ride_date === date).length;
+              const heightPct = chartYMax > 0 ? (count / chartYMax) * 100 : 0;
+              const isToday = date === todayString;
+              const dayStr = parseInt(date.split('-')[2], 10);
+              
+              // Converteer de datum naar een Nederlandse dag-afkorting (ma, di, wo, etc)
+              const dateObj = new Date(date);
+              const weekdayStr = new Intl.DateTimeFormat("nl-NL", { weekday: "short" }).format(dateObj);
+
+              return (
+                <div key={date} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", gap: 6, minWidth: 26, height: "100%" }}>
+                  <div style={{ color: theme.textMain, fontWeight: 800, fontSize: 11 }}>{count > 0 ? count : ""}</div>
+                  
+                  <div style={{ width: "100%", maxWidth: 30, background: theme.chartBg, borderRadius: "4px 4px 0 0", height: "120px", position: "relative", overflow: "hidden", display: "flex", alignItems: "flex-end" }}>
+                    <div style={{ width: "100%", background: isToday ? theme.chartBar : (theme.isDark ? "#475569" : "#cbd5e1"), height: `${heightPct}%`, transition: "height 0.8s cubic-bezier(0.4, 0, 0.2, 1)", borderRadius: "4px 4px 0 0", opacity: isToday ? 1 : 0.7 }} />
+                  </div>
+                  
+                  {/* Vernieuwde weergave voor de dag van de week + datum nummer */}
+                  <div style={{ color: isToday ? theme.chartBar : theme.textMuted, fontSize: 10, fontWeight: isToday ? 800 : 600, textAlign: "center", lineHeight: 1.2 }} title={date}>
+                    <div style={{ textTransform: "capitalize" }}>{weekdayStr}</div>
+                    <div>{dayStr}</div>
+                  </div>
                 </div>
               );
             })}
           </div>
         </div>
 
+        {/* Status Overzicht */}
         <div style={{ background: theme.cardBg, borderRadius: 24, border: `1px solid ${theme.border}`, padding: 24, boxShadow: theme.shadow }}>
           <h3 style={{ margin: "0 0 20px 0", color: theme.textMain }}>Status Overzicht</h3>
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -385,9 +527,47 @@ function StatisticsDashboard({ rides }) {
           </div>
         </div>
       </div>
+
+      <div style={{ background: theme.cardBg, borderRadius: 24, border: `1px solid ${theme.border}`, padding: 24, boxShadow: theme.shadow, overflowX: "auto" }}>
+        <h3 style={{ margin: "0 0 20px 0", color: theme.textMain }}>Prestaties per Chauffeur</h3>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 600 }}>
+          <thead>
+            <tr style={{ background: theme.tableHeaderBg, textAlign: "left" }}>
+              <th style={{ padding: "12px 16px", color: theme.textMuted, fontSize: 13, fontWeight: 800 }}>Chauffeur</th>
+              <th style={{ padding: "12px 16px", color: theme.textMuted, fontSize: 13, fontWeight: 800 }}>Totaal Toegewezen</th>
+              <th style={{ padding: "12px 16px", color: theme.textMuted, fontSize: 13, fontWeight: 800 }}>Afgerond</th>
+              <th style={{ padding: "12px 16px", color: theme.textMuted, fontSize: 13, fontWeight: 800 }}>On-Time Score</th>
+            </tr>
+          </thead>
+          <tbody>
+            {detailedDriverStats.map(stat => (
+              <tr key={stat.name} style={{ borderTop: `1px solid ${theme.border}` }}>
+                <td style={{ padding: "14px 16px", color: theme.textMain, fontWeight: 700, display: "flex", alignItems: "center", gap: 10 }}>
+                  <div style={{ width: 10, height: 10, borderRadius: "50%", background: driverColors[stat.name] || theme.chartBar }} />
+                  {stat.name}
+                </td>
+                <td style={{ padding: "14px 16px", color: theme.textMain }}>{stat.total} ritten</td>
+                <td style={{ padding: "14px 16px", color: theme.textMain }}>
+                  {stat.completed} <span style={{ color: theme.textMuted, fontSize: 12 }}>({stat.total > 0 ? Math.round((stat.completed/stat.total)*100) : 0}%)</span>
+                </td>
+                <td style={{ padding: "14px 16px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontWeight: 800, color: stat.otp >= 90 ? "#10b981" : stat.otp >= 75 ? "#f59e0b" : "#ef4444" }}>
+                      {stat.otp}%
+                    </span>
+                    <span style={{ color: theme.textMuted, fontSize: 12 }}>(uit {stat.otpCount} gemeten)</span>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
     </div>
   );
 }
+// ---------------- EINDE STATISTIEKEN COMPONENT ----------------
 
 function AuthScreen() {
   const windowWidth = useWindowWidth();
@@ -550,9 +730,7 @@ function RideEditor({ selectedRide, onSave, onDelete, onNew, saving, onShift }) 
           {isEditingOriginalRide && (
             <>
               <button type="button" onClick={handleCreateReturnRide} disabled={saving} style={getSecondaryButtonStyle(theme)}>Retour</button>
-              
               <button type="button" onClick={() => exportRideToWord(selectedRide)} disabled={saving} style={{ ...getSecondaryButtonStyle(theme), background: theme.isDark ? "rgba(59, 130, 246, 0.2)" : "#eff6ff", color: theme.isDark ? "#93c5fd" : "#1d4ed8", border: theme.isDark ? "1px solid rgba(59, 130, 246, 0.4)" : "1px solid #bfdbfe", padding: "10px 14px" }}>📄 Werkkaart</button>
-              
               <button type="button" onClick={() => onDelete(selectedRide.id)} disabled={saving} style={{ background: theme.isDark ? "rgba(185, 28, 28, 0.2)" : "#fee2e2", color: theme.isDark ? "#fca5a5" : "#b91c1c", border: theme.isDark ? "1px solid rgba(185, 28, 28, 0.4)" : "1px solid #fecaca", borderRadius: 10, padding: "10px 14px", fontWeight: 800, cursor: "pointer", transition: "all 0.3s ease" }}>Verwijderen</button>
             </>
           )}
