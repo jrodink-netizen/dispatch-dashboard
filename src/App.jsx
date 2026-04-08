@@ -161,7 +161,7 @@ function exportCompletedRidesToExcel(rides) {
       Notities: ride.notes ?? "",
       Status: ride.status ?? "",
       "Op tijd": onTime,
-      "Werkkaart": ride.workcard_printed ? "Geprint" : "Nee" // Ook meegenomen in de export!
+      "Werkkaart": ride.workcard_printed ? "Geprint" : "Nee"
     };
   });
 
@@ -307,10 +307,16 @@ function StatCard({ title, value, sub }) {
   );
 }
 
+// ---------------- UITGEBREIDE STATISTIEKEN COMPONENT MET CAPACITEIT ----------------
 function StatisticsDashboard({ rides }) {
   const { theme } = useContext(ThemeContext);
   const isMobile = useWindowWidth() < 700;
   
+  // --- NIEUWE CAPACITEIT STATEN ---
+  const [activeDrivers, setActiveDrivers] = useState(2); // Standaard op 2 gezet
+  const [maxRidesPerDriver, setMaxRidesPerDriver] = useState(8);
+  const dailyCapacity = activeDrivers * maxRidesPerDriver;
+
   const totalRides = rides.length;
   const completedRides = rides.filter((r) => r.status === "Afgerond").length;
   const completionRate = totalRides > 0 ? Math.round((completedRides / totalRides) * 100) : 0;
@@ -353,7 +359,68 @@ function StatisticsDashboard({ rides }) {
   const busiestDay = dates[busiestDayIndex] ? formatDate(dates[busiestDayIndex]) : "N/A";
   
   const maxRides4Weeks = Math.max(...fourWeeksDates.map(date => rides.filter(r => r.ride_date === date).length), 0);
-  const chartYMax = Math.max(maxPerDay, maxRides4Weeks, 10);
+
+  // --- SLIMME VOORSPELLINGS LOGICA (Laatste 6 weken) ---
+  const getDayEfficiency = (dayName) => {
+    const sixWeeksAgo = new Date();
+    sixWeeksAgo.setDate(sixWeeksAgo.getDate() - 42);
+    const sixWeeksAgoStr = sixWeeksAgo.toISOString().slice(0, 10);
+
+    const historicalRides = rides.filter(r => {
+      const d = new Date(r.ride_date);
+      const day = new Intl.DateTimeFormat("en-US", { weekday: "long" }).format(d);
+      return day === dayName && r.ride_date < todayString && r.ride_date >= sixWeeksAgoStr;
+    });
+    
+    const uniqueDates = [...new Set(historicalRides.map(r => r.ride_date))];
+    if (uniqueDates.length === 0) return 0;
+    return Math.round(historicalRides.length / uniqueDates.length);
+  };
+
+  const predictions = useMemo(() => {
+    const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    return dayNames.reduce((acc, name) => {
+      acc[name] = getDayEfficiency(name);
+      return acc;
+    }, {});
+  }, [rides, todayString]);
+
+  const maxPrediction = Math.max(...Object.values(predictions), 0);
+  
+  // Zorg dat de grafiek hoog genoeg is om de dagcapaciteit óók te tonen
+  const chartYMax = Math.max(maxPerDay, maxRides4Weeks, maxPrediction, dailyCapacity, 10);
+
+  // --- CAPACITEIT TEKORT ALARM ---
+  const next7Days = fourWeeksDates.filter(d => d > todayString).slice(0, 7);
+  const predictionAlert = useMemo(() => {
+    let highestDeficit = 0;
+    let alertData = null;
+
+    next7Days.forEach(date => {
+      const dayNameEn = new Intl.DateTimeFormat("en-US", { weekday: "long" }).format(new Date(date));
+      const prediction = predictions[dayNameEn] || 0;
+      const currentCount = rides.filter(r => r.ride_date === date).length;
+      
+      const expectedTotal = Math.max(prediction, currentCount);
+
+      if (expectedTotal > dailyCapacity) {
+        const deficit = expectedTotal - dailyCapacity;
+        if (deficit > highestDeficit) {
+          highestDeficit = deficit;
+          alertData = {
+            day: new Intl.DateTimeFormat("nl-NL", { weekday: "long" }).format(new Date(date)),
+            date: date,
+            expected: expectedTotal,
+            capacity: dailyCapacity,
+            deficit: deficit,
+            driversShort: Math.ceil(deficit / maxRidesPerDriver) // Aantal chauffeurs dat je mist
+          };
+        }
+      }
+    });
+    return alertData;
+  }, [predictions, next7Days, dailyCapacity, maxRidesPerDriver, rides]);
+  // ----------------------------------------
 
   const detailedDriverStats = driverOptions.map(driver => {
     const dRides = rides.filter(r => r.driver_name === driver);
@@ -376,6 +443,41 @@ function StatisticsDashboard({ rides }) {
         <h2 style={{ margin: 0, color: theme.textMain }}>Dashboard Overzicht</h2>
         <button type="button" onClick={() => exportCompletedRidesToExcel(rides)} style={getSecondaryButtonStyle(theme)}>Exporteer Data (Excel)</button>
       </div>
+
+      {/* CAPACITEITS-INSTELLINGEN */}
+      <div style={{ background: theme.cardBg, borderRadius: 20, border: `1px solid ${theme.border}`, padding: 20, display: "flex", gap: 24, flexWrap: "wrap", alignItems: "center", boxShadow: theme.shadow }}>
+        <div style={{ flex: 1, minWidth: 200 }}>
+          <label style={{ ...getLabelStyle(theme), marginBottom: 6 }}>Werkende chauffeurs (per dag)</label>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <input type="number" min="1" max="20" value={activeDrivers} onChange={(e) => setActiveDrivers(Number(e.target.value))} style={{ ...getInputStyle(theme), width: 80 }} />
+            <span style={{ color: theme.textMuted, fontSize: 14 }}>personen</span>
+          </div>
+        </div>
+        <div style={{ flex: 1, minWidth: 200 }}>
+          <label style={{ ...getLabelStyle(theme), marginBottom: 6 }}>Max ritten per chauffeur</label>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <input type="number" min="1" max="50" value={maxRidesPerDriver} onChange={(e) => setMaxRidesPerDriver(Number(e.target.value))} style={{ ...getInputStyle(theme), width: 80 }} />
+            <span style={{ color: theme.textMuted, fontSize: 14 }}>ritten</span>
+          </div>
+        </div>
+        <div style={{ background: theme.isDark ? "rgba(59, 130, 246, 0.15)" : "#eff6ff", border: `1px solid ${theme.isDark ? "rgba(59, 130, 246, 0.4)" : "#bfdbfe"}`, padding: "12px 20px", borderRadius: 16, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minWidth: 160 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: theme.isDark ? "#93c5fd" : "#1d4ed8", textTransform: "uppercase", letterSpacing: 1 }}>Ploeg Plafond</div>
+          <div style={{ fontSize: 24, fontWeight: 900, color: theme.isDark ? "#60a5fa" : "#2563eb" }}>{dailyCapacity} <span style={{ fontSize: 14, fontWeight: 700 }}>ritten</span></div>
+        </div>
+      </div>
+
+      {/* OVERCAPACITEIT ALARM */}
+      {predictionAlert && (
+        <div style={{ background: theme.isDark ? "rgba(239, 68, 68, 0.15)" : "#fef2f2", border: `1px solid ${theme.isDark ? "rgba(239, 68, 68, 0.4)" : "#fecaca"}`, borderRadius: 16, padding: "16px 20px", display: "flex", alignItems: "center", gap: 12, animation: "fadeIn 0.5s ease" }}>
+          <div style={{ fontSize: 28 }}>🚨</div>
+          <div>
+            <div style={{ color: theme.isDark ? "#fca5a5" : "#b91c1c", fontWeight: 800, fontSize: 15 }}>Capaciteitstekort Verwacht</div>
+            <div style={{ color: theme.textMain, fontSize: 14, marginTop: 4, lineHeight: 1.5 }}>
+              Op <strong><span style={{ textTransform: "capitalize" }}>{predictionAlert.day}</span> ({formatDate(predictionAlert.date).split(" ")[0]} {formatDate(predictionAlert.date).split(" ")[1]})</strong> worden <strong>{predictionAlert.expected} ritten</strong> verwacht, maar je limiet staat op {predictionAlert.capacity}. Je komt waarschijnlijk <strong>{predictionAlert.driversShort} chauffeur(s)</strong> tekort!
+            </div>
+          </div>
+        </div>
+      )}
 
       <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(3, 1fr)", gap: 16 }}>
         <StatCard title="Totaal Ritten/Auto's" value={totalRides} sub="Actief gepland in het systeem" />
@@ -463,28 +565,64 @@ function StatisticsDashboard({ rides }) {
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "2fr 1fr", gap: 24 }}>
+        
+        {/* TIJDLIJN MET RODE CAPACITEITSLIJN */}
         <div style={{ background: theme.cardBg, borderRadius: 24, border: `1px solid ${theme.border}`, padding: 24, boxShadow: theme.shadow }}>
-          <h3 style={{ margin: "0 0 20px 0", color: theme.textMain }}>Tijdlijn: 4 Weken (Ritten per Dag)</h3>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10, marginBottom: 20 }}>
+            <div>
+              <h3 style={{ margin: "0 0 4px 0", color: theme.textMain }}>Tijdlijn & Capaciteit (4 Weken)</h3>
+              <div style={{ fontSize: 12, color: theme.textMuted, display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ display: "inline-block", width: 12, height: 2, background: "#ef4444" }}></span> 
+                Rode lijn = maximale capaciteit ({dailyCapacity} ritten)
+              </div>
+            </div>
+          </div>
           
           <div style={{ display: "flex", gap: isMobile ? 4 : 6, height: 180, paddingTop: 10, overflowX: "auto", paddingBottom: 10 }}>
             {fourWeeksDates.map((date) => {
               const count = rides.filter(r => r.ride_date === date).length;
-              const heightPct = chartYMax > 0 ? (count / chartYMax) * 100 : 0;
               const isToday = date === todayString;
+              const dateObj = new Date(date);
+              const dayNameEn = new Intl.DateTimeFormat("en-US", { weekday: "long" }).format(dateObj);
+              const weekdayStr = new Intl.DateTimeFormat("nl-NL", { weekday: "short" }).format(dateObj);
               const dayStr = parseInt(date.split('-')[2], 10);
               
-              const dateObj = new Date(date);
-              const weekdayStr = new Intl.DateTimeFormat("nl-NL", { weekday: "short" }).format(dateObj);
+              const prediction = predictions[dayNameEn] || 0;
+              const heightPct = chartYMax > 0 ? (count / chartYMax) * 100 : 0;
+              const predHeightPct = chartYMax > 0 ? (prediction / chartYMax) * 100 : 0;
+              
+              const isOverCapacity = Math.max(count, prediction) > dailyCapacity && date > todayString;
 
               return (
                 <div key={date} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", gap: 6, minWidth: 26, height: "100%" }}>
-                  <div style={{ color: theme.textMain, fontWeight: 800, fontSize: 11 }}>{count > 0 ? count : ""}</div>
                   
-                  <div style={{ width: "100%", maxWidth: 30, background: theme.chartBg, borderRadius: "4px 4px 0 0", height: "120px", position: "relative", overflow: "hidden", display: "flex", alignItems: "flex-end" }}>
-                    <div style={{ width: "100%", background: isToday ? theme.chartBar : (theme.isDark ? "#475569" : "#cbd5e1"), height: `${heightPct}%`, transition: "height 0.8s cubic-bezier(0.4, 0, 0.2, 1)", borderRadius: "4px 4px 0 0", opacity: isToday ? 1 : 0.7 }} />
+                  {date > todayString ? (
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", lineHeight: 1.1 }}>
+                      <div style={{ color: count > dailyCapacity ? "#ef4444" : theme.textMain, fontWeight: 900, fontSize: 12 }} title={`${count} al gepland`}>{count > 0 ? count : "0"}</div>
+                      {prediction > 0 && (
+                        <div style={{ color: prediction > dailyCapacity ? "#ef4444" : theme.textMuted, fontSize: 10, fontWeight: 700, marginTop: 4 }} title={`Historisch verwacht: ~${prediction}`}>
+                          (~{prediction})
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div style={{ color: theme.textMain, fontWeight: 800, fontSize: 11 }}>{count > 0 ? count : ""}</div>
+                  )}
+                  
+                  <div style={{ width: "100%", maxWidth: 30, background: theme.chartBg, borderRadius: "4px 4px 0 0", height: "120px", position: "relative", display: "flex", alignItems: "flex-end" }}>
+                    
+                    {/* RODE CAPACITEITSLIJN (Dwars door de balk) */}
+                    <div style={{ position: "absolute", bottom: `${(dailyCapacity / chartYMax) * 100}%`, left: -2, right: -2, height: 2, background: "#ef4444", zIndex: 10 }} title={`Limiet: ${dailyCapacity}`} />
+
+                    {/* Voorspellings-schaduw */}
+                    {date > todayString && (
+                      <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, background: isOverCapacity ? "rgba(239, 68, 68, 0.15)" : (theme.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)"), height: `${predHeightPct}%`, borderTop: `1px dashed ${isOverCapacity ? "#ef4444" : theme.textMuted}`, zIndex: 1 }} title={`Verwacht: ${prediction} ritten`} />
+                    )}
+                    {/* Echte geplande data */}
+                    <div style={{ width: "100%", background: isToday ? theme.chartBar : (count > dailyCapacity ? "#ef4444" : (theme.isDark ? "#475569" : "#cbd5e1")), height: `${heightPct}%`, transition: "height 0.8s cubic-bezier(0.4, 0, 0.2, 1)", borderRadius: "4px 4px 0 0", opacity: isToday ? 1 : 0.8, zIndex: 2 }} />
                   </div>
                   
-                  <div style={{ color: isToday ? theme.chartBar : theme.textMuted, fontSize: 10, fontWeight: isToday ? 800 : 600, textAlign: "center", lineHeight: 1.2 }} title={date}>
+                  <div style={{ color: isToday ? theme.chartBar : (isOverCapacity ? "#ef4444" : theme.textMuted), fontSize: 10, fontWeight: isToday || isOverCapacity ? 800 : 600, textAlign: "center", lineHeight: 1.2 }} title={date}>
                     <div style={{ textTransform: "capitalize" }}>{weekdayStr}</div>
                     <div>{dayStr}</div>
                   </div>
@@ -636,7 +774,7 @@ function RideEditor({ selectedRide, onSave, onDelete, onNew, saving, onShift, on
       cargo: ride?.cargo || "", 
       notes: ride?.notes || "", 
       status: ride?.status || "Gepland",
-      workcard_printed: ride?.workcard_printed || false, // Neem geprint status over
+      workcard_printed: ride?.workcard_printed || false,
     };
   }
 
@@ -718,8 +856,6 @@ function RideEditor({ selectedRide, onSave, onDelete, onNew, saving, onShift, on
           {isEditingOriginalRide && (
             <>
               <button type="button" onClick={handleCreateReturnRide} disabled={saving} style={getSecondaryButtonStyle(theme)}>Retour</button>
-              
-              {/* Werkkaart Print Knop - Roept nu de database functie aan */}
               <button 
                 type="button" 
                 onClick={() => { 
@@ -733,7 +869,6 @@ function RideEditor({ selectedRide, onSave, onDelete, onNew, saving, onShift, on
               >
                 📄 Werkkaart {selectedRide?.workcard_printed && <span style={{ color: "#10b981", fontSize: "14px", fontWeight: "900" }} title="Is al geprint">✔</span>}
               </button>
-              
               <button type="button" onClick={() => onDelete(selectedRide.id)} disabled={saving} style={{ background: theme.isDark ? "rgba(185, 28, 28, 0.2)" : "#fee2e2", color: theme.isDark ? "#fca5a5" : "#b91c1c", border: theme.isDark ? "1px solid rgba(185, 28, 28, 0.4)" : "1px solid #fecaca", borderRadius: 10, padding: "10px 14px", fontWeight: 800, cursor: "pointer", transition: "all 0.3s ease" }}>Verwijderen</button>
             </>
           )}
@@ -839,7 +974,6 @@ function RideTable({ rides, selectedRideId, onSelectRide, search, setSearch, sta
                       <td style={tdStyle}>
                         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                           {ride.driver_name} 
-                          {/* Klein icoontje in de tabel als de kaart geprint is */}
                           {ride.workcard_printed && <span title="Werkkaart is geprint" style={{ fontSize: 13 }}>📄</span>}
                         </div>
                       </td>
@@ -955,7 +1089,6 @@ function Dashboard({ session }) {
     setSaving(false);
   }
 
-  // NIEUWE FUNCTIE: Werkt het vinkje direct in de database bij
   async function markWorkcardPrinted(rideId) {
     if (!rideId) return;
     const { error } = await supabase.from("rides").update({ workcard_printed: true }).eq("id", rideId);
