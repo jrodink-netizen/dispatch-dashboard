@@ -96,7 +96,7 @@ function addMinutesToTimeString(timeString, minutesToAdd) {
   ).padStart(2, "0")}`;
 }
 
-function isTimeOnTime(plannedTime, actualTime, graceMinutes = 5) {
+function isTimeOnTime(plannedTime, actualTime, graceMinutes = 15) {
   if (!plannedTime || !actualTime) return false;
   const [pH, pM] = plannedTime.split(":").map(Number);
   const [aH, aM] = actualTime.split(":").map(Number);
@@ -161,6 +161,7 @@ function exportCompletedRidesToExcel(rides) {
       Notities: ride.notes ?? "",
       Status: ride.status ?? "",
       "Op tijd": onTime,
+      "Werkkaart": ride.workcard_printed ? "Geprint" : "Nee" // Ook meegenomen in de export!
     };
   });
 
@@ -168,7 +169,7 @@ function exportCompletedRidesToExcel(rides) {
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, "Afgeronde ritten");
 
-  const columnWidths = [{ wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 18 }, { wch: 16 }, { wch: 30 }, { wch: 30 }, { wch: 18 }, { wch: 30 }, { wch: 12 }, { wch: 10 }];
+  const columnWidths = [{ wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 18 }, { wch: 16 }, { wch: 30 }, { wch: 30 }, { wch: 18 }, { wch: 30 }, { wch: 12 }, { wch: 10 }, { wch: 12 }];
   worksheet["!cols"] = columnWidths;
 
   const today = new Date();
@@ -306,7 +307,6 @@ function StatCard({ title, value, sub }) {
   );
 }
 
-// ---------------- UITGEBREIDE STATISTIEKEN COMPONENT ----------------
 function StatisticsDashboard({ rides }) {
   const { theme } = useContext(ThemeContext);
   const isMobile = useWindowWidth() < 700;
@@ -328,14 +328,12 @@ function StatisticsDashboard({ rides }) {
     "Fiona": "#8b5cf6"    // Paars
   };
 
-  // Populairste Route
   const routes = rides.filter(r => r.pickup_location && r.delivery_location).map(r => `${r.pickup_location} → ${r.delivery_location}`);
   const routeCounts = {};
   routes.forEach(r => routeCounts[r] = (routeCounts[r] || 0) + 1);
   const popularRoute = Object.keys(routeCounts).sort((a,b) => routeCounts[b] - routeCounts[a])[0] || "Onvoldoende data";
   const popularRouteCount = routeCounts[popularRoute] || 0;
 
-  // Data voor 4 Weken Tijdlijn
   const fourWeeksDates = [];
   const current = new Date();
   for (let i = -14; i <= 14; i++) {
@@ -348,7 +346,6 @@ function StatisticsDashboard({ rides }) {
   }
   const todayString = `${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, '0')}-${String(current.getDate()).padStart(2, '0')}`;
   
-  // Data voor Gestapelde Grafiek (actieve rijdagen)
   const dates = [...new Set(rides.map(r => r.ride_date))].sort();
   const dateCounts = dates.map(date => rides.filter(r => r.ride_date === date).length);
   const maxPerDay = Math.max(...dateCounts, 0);
@@ -356,11 +353,8 @@ function StatisticsDashboard({ rides }) {
   const busiestDay = dates[busiestDayIndex] ? formatDate(dates[busiestDayIndex]) : "N/A";
   
   const maxRides4Weeks = Math.max(...fourWeeksDates.map(date => rides.filter(r => r.ride_date === date).length), 0);
-
-  // Globale as-maximum zodat verhoudingen altijd kloppen
   const chartYMax = Math.max(maxPerDay, maxRides4Weeks, 10);
 
-  // Gedetailleerde tabel data per chauffeur
   const detailedDriverStats = driverOptions.map(driver => {
     const dRides = rides.filter(r => r.driver_name === driver);
     const dTotal = dRides.length;
@@ -409,7 +403,6 @@ function StatisticsDashboard({ rides }) {
         <StatCard title="Drukste Planningsdag" value={busiestDay} sub={maxPerDay > 0 ? `Met een piek van ${maxPerDay} geplande ritten` : "Geen data beschikbaar"} />
       </div>
 
-      {/* Gestapeld Staafdiagram (Voertuigen per Dag per Chauffeur) */}
       <div style={{ background: theme.cardBg, borderRadius: 24, border: `1px solid ${theme.border}`, padding: 24, boxShadow: theme.shadow }}>
         <h3 style={{ margin: "0 0 6px 0", color: theme.textMain }}>Ritten per Dag & Chauffeur</h3>
         <p style={{ margin: "0 0 20px 0", color: theme.textMuted, fontSize: 13 }}>Dagelijks overzicht van geplande en afgeronde ritten, opgesplitst per chauffeur.</p>
@@ -470,8 +463,6 @@ function StatisticsDashboard({ rides }) {
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "2fr 1fr", gap: 24 }}>
-        
-        {/* Tijdlijn 4 Weken met Dag van de week erbij */}
         <div style={{ background: theme.cardBg, borderRadius: 24, border: `1px solid ${theme.border}`, padding: 24, boxShadow: theme.shadow }}>
           <h3 style={{ margin: "0 0 20px 0", color: theme.textMain }}>Tijdlijn: 4 Weken (Ritten per Dag)</h3>
           
@@ -482,7 +473,6 @@ function StatisticsDashboard({ rides }) {
               const isToday = date === todayString;
               const dayStr = parseInt(date.split('-')[2], 10);
               
-              // Converteer de datum naar een Nederlandse dag-afkorting (ma, di, wo, etc)
               const dateObj = new Date(date);
               const weekdayStr = new Intl.DateTimeFormat("nl-NL", { weekday: "short" }).format(dateObj);
 
@@ -494,7 +484,6 @@ function StatisticsDashboard({ rides }) {
                     <div style={{ width: "100%", background: isToday ? theme.chartBar : (theme.isDark ? "#475569" : "#cbd5e1"), height: `${heightPct}%`, transition: "height 0.8s cubic-bezier(0.4, 0, 0.2, 1)", borderRadius: "4px 4px 0 0", opacity: isToday ? 1 : 0.7 }} />
                   </div>
                   
-                  {/* Vernieuwde weergave voor de dag van de week + datum nummer */}
                   <div style={{ color: isToday ? theme.chartBar : theme.textMuted, fontSize: 10, fontWeight: isToday ? 800 : 600, textAlign: "center", lineHeight: 1.2 }} title={date}>
                     <div style={{ textTransform: "capitalize" }}>{weekdayStr}</div>
                     <div>{dayStr}</div>
@@ -505,7 +494,6 @@ function StatisticsDashboard({ rides }) {
           </div>
         </div>
 
-        {/* Status Overzicht */}
         <div style={{ background: theme.cardBg, borderRadius: 24, border: `1px solid ${theme.border}`, padding: 24, boxShadow: theme.shadow }}>
           <h3 style={{ margin: "0 0 20px 0", color: theme.textMain }}>Status Overzicht</h3>
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -567,7 +555,6 @@ function StatisticsDashboard({ rides }) {
     </div>
   );
 }
-// ---------------- EINDE STATISTIEKEN COMPONENT ----------------
 
 function AuthScreen() {
   const windowWidth = useWindowWidth();
@@ -630,7 +617,7 @@ function AuthScreen() {
   );
 }
 
-function RideEditor({ selectedRide, onSave, onDelete, onNew, saving, onShift }) {
+function RideEditor({ selectedRide, onSave, onDelete, onNew, saving, onShift, onMarkPrinted }) {
   const windowWidth = useWindowWidth();
   const isSmall = windowWidth < 700;
   const { theme } = useContext(ThemeContext);
@@ -649,6 +636,7 @@ function RideEditor({ selectedRide, onSave, onDelete, onNew, saving, onShift }) 
       cargo: ride?.cargo || "", 
       notes: ride?.notes || "", 
       status: ride?.status || "Gepland",
+      workcard_printed: ride?.workcard_printed || false, // Neem geprint status over
     };
   }
 
@@ -684,7 +672,7 @@ function RideEditor({ selectedRide, onSave, onDelete, onNew, saving, onShift }) 
     if (!selectedRide) return;
     setFormData({
       ...formData, id: null, departure_time: addMinutesToTimeString(formData.arrival_time, 15), arrival_time: "", actual_arrival_time: "",
-      pickup_location: formData.delivery_location || "", delivery_location: formData.pickup_location || "", cargo: "", notes: "", status: "Gepland",
+      pickup_location: formData.delivery_location || "", delivery_location: formData.pickup_location || "", cargo: "", notes: "", status: "Gepland", workcard_printed: false
     });
     setIsReturnDraft(true);
   }
@@ -730,7 +718,22 @@ function RideEditor({ selectedRide, onSave, onDelete, onNew, saving, onShift }) 
           {isEditingOriginalRide && (
             <>
               <button type="button" onClick={handleCreateReturnRide} disabled={saving} style={getSecondaryButtonStyle(theme)}>Retour</button>
-              <button type="button" onClick={() => exportRideToWord(selectedRide)} disabled={saving} style={{ ...getSecondaryButtonStyle(theme), background: theme.isDark ? "rgba(59, 130, 246, 0.2)" : "#eff6ff", color: theme.isDark ? "#93c5fd" : "#1d4ed8", border: theme.isDark ? "1px solid rgba(59, 130, 246, 0.4)" : "1px solid #bfdbfe", padding: "10px 14px" }}>📄 Werkkaart</button>
+              
+              {/* Werkkaart Print Knop - Roept nu de database functie aan */}
+              <button 
+                type="button" 
+                onClick={() => { 
+                  exportRideToWord(selectedRide); 
+                  if (selectedRide.id && !selectedRide.workcard_printed) {
+                    onMarkPrinted(selectedRide.id);
+                  }
+                }} 
+                disabled={saving} 
+                style={{ ...getSecondaryButtonStyle(theme), background: theme.isDark ? "rgba(59, 130, 246, 0.2)" : "#eff6ff", color: theme.isDark ? "#93c5fd" : "#1d4ed8", border: theme.isDark ? "1px solid rgba(59, 130, 246, 0.4)" : "1px solid #bfdbfe", padding: "10px 14px", display: "flex", alignItems: "center", gap: 6 }}
+              >
+                📄 Werkkaart {selectedRide?.workcard_printed && <span style={{ color: "#10b981", fontSize: "14px", fontWeight: "900" }} title="Is al geprint">✔</span>}
+              </button>
+              
               <button type="button" onClick={() => onDelete(selectedRide.id)} disabled={saving} style={{ background: theme.isDark ? "rgba(185, 28, 28, 0.2)" : "#fee2e2", color: theme.isDark ? "#fca5a5" : "#b91c1c", border: theme.isDark ? "1px solid rgba(185, 28, 28, 0.4)" : "1px solid #fecaca", borderRadius: 10, padding: "10px 14px", fontWeight: 800, cursor: "pointer", transition: "all 0.3s ease" }}>Verwijderen</button>
             </>
           )}
@@ -773,7 +776,10 @@ function RideCardsMobile({ rides, selectedRideId, onSelectRide }) {
                 </div>
                 <Badge style={getRideStatusStyle(ride.status, theme.isDark)}>{ride.status}</Badge>
               </div>
-              <div style={{ marginTop: 12, color: theme.textMain, fontWeight: 800 }}>{ride.driver_name}</div>
+              <div style={{ marginTop: 12, color: theme.textMain, fontWeight: 800, display: "flex", alignItems: "center", gap: 6 }}>
+                {ride.driver_name} 
+                {ride.workcard_printed && <span title="Werkkaart is geprint" style={{ fontSize: 14 }}>📄</span>}
+              </div>
               <div style={{ marginTop: 10, color: theme.textMuted, fontSize: 14, lineHeight: 1.5 }}>
                 <div><strong>Van:</strong> <a href={getMapUrl(ride.pickup_location)} target="_blank" rel="noreferrer" style={locationLinkStyle} onClick={(e) => e.stopPropagation()}>{ride.pickup_location || "—"}</a></div>
                 <div style={{ marginTop: 4 }}><strong>Naar:</strong> <a href={getMapUrl(ride.delivery_location)} target="_blank" rel="noreferrer" style={locationLinkStyle} onClick={(e) => e.stopPropagation()}>{ride.delivery_location || "—"}</a></div>
@@ -830,7 +836,13 @@ function RideTable({ rides, selectedRideId, onSelectRide, search, setSearch, sta
                     <tr key={ride.id} onClick={() => onSelectRide(ride)} style={{ background: selected ? theme.rowSelected : "transparent", cursor: "pointer", borderTop: `1px solid ${theme.border}`, transition: "background 0.3s ease" }}>
                       <td style={tdStyle}>{formatDate(ride.ride_date)}</td>
                       <td style={tdStyle}><div style={{ fontWeight: 800, color: theme.textMain }}>{ride.departure_time} → {isCompleted ? (<span style={{ color: "#10b981" }} title="Echte aankomsttijd">{ride.actual_arrival_time}</span>) : (ride.arrival_time)}</div></td>
-                      <td style={tdStyle}>{ride.driver_name}</td>
+                      <td style={tdStyle}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          {ride.driver_name} 
+                          {/* Klein icoontje in de tabel als de kaart geprint is */}
+                          {ride.workcard_printed && <span title="Werkkaart is geprint" style={{ fontSize: 13 }}>📄</span>}
+                        </div>
+                      </td>
                       <td style={tdStyle}><a href={getMapUrl(ride.pickup_location)} target="_blank" rel="noreferrer" style={locationLinkStyle} onClick={(e) => e.stopPropagation()}>{ride.pickup_location || "—"}</a></td>
                       <td style={tdStyle}><a href={getMapUrl(ride.delivery_location)} target="_blank" rel="noreferrer" style={locationLinkStyle} onClick={(e) => e.stopPropagation()}>{ride.delivery_location || "—"}</a></td>
                       <td style={tdStyle}>{ride.cargo}</td>
@@ -941,6 +953,17 @@ function Dashboard({ session }) {
       setSelectedRideId(data.id);
     }
     setSaving(false);
+  }
+
+  // NIEUWE FUNCTIE: Werkt het vinkje direct in de database bij
+  async function markWorkcardPrinted(rideId) {
+    if (!rideId) return;
+    const { error } = await supabase.from("rides").update({ workcard_printed: true }).eq("id", rideId);
+    if (!error) {
+      setRides((prev) => prev.map((r) => r.id === rideId ? { ...r, workcard_printed: true } : r));
+    } else {
+      console.error("Fout bij opslaan werkkaart status:", error.message);
+    }
   }
 
   async function deleteRide(rideId) {
@@ -1064,6 +1087,7 @@ function Dashboard({ session }) {
               onNew={newRide}
               saving={saving}
               onShift={shiftSubsequentRides}
+              onMarkPrinted={markWorkcardPrinted}
             />
           </div>
         )}
