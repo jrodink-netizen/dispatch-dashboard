@@ -50,6 +50,22 @@ const rideStatuses = ["Gepland", "Bevestigd", "Onderweg", "Afgerond"];
 const driverOptions = ["Erwin", "Julian", "Gerben", "Hans", "Fiona"];
 
 // --- Helper Functies ---
+
+// Veilige lokale datum parsing (voorkomt UTC offset problemen bij middernacht)
+function parseLocalDate(dateString) {
+  if (!dateString) return new Date();
+  const [year, month, day] = dateString.split('-');
+  return new Date(year, month - 1, day);
+}
+
+// Berekent de mediaan van een array getallen (robuuster tegen uitschieters dan gemiddelde)
+function calculateMedian(values) {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 !== 0 ? sorted[mid] : Math.round((sorted[mid - 1] + sorted[mid]) / 2);
+}
+
 function useWindowWidth() {
   const getWidth = () => (typeof window !== "undefined" ? window.innerWidth : 1200);
   const [windowWidth, setWindowWidth] = useState(getWidth);
@@ -76,7 +92,7 @@ function sortRides(list) {
 
 function formatDate(dateString) {
   if (!dateString) return "";
-  const date = new Date(dateString);
+  const date = parseLocalDate(dateString);
   return new Intl.DateTimeFormat("nl-NL", {
     weekday: "short",
     day: "2-digit",
@@ -307,13 +323,13 @@ function StatCard({ title, value, sub }) {
   );
 }
 
-// ---------------- UITGEBREIDE STATISTIEKEN COMPONENT MET CAPACITEIT ----------------
+// ---------------- UITGEBREIDE STATISTIEKEN COMPONENT MET CAPACITEIT & ROBUUSTE VOORSPELLING ----------------
 function StatisticsDashboard({ rides }) {
   const { theme } = useContext(ThemeContext);
   const isMobile = useWindowWidth() < 700;
   
-  // --- NIEUWE CAPACITEIT STATEN ---
-  const [activeDrivers, setActiveDrivers] = useState(2); // Standaard op 2 gezet
+  // --- CAPACITEIT STATEN ---
+  const [activeDrivers, setActiveDrivers] = useState(2); 
   const [maxRidesPerDriver, setMaxRidesPerDriver] = useState(8);
   const dailyCapacity = activeDrivers * maxRidesPerDriver;
 
@@ -342,9 +358,13 @@ function StatisticsDashboard({ rides }) {
 
   const fourWeeksDates = [];
   const current = new Date();
-  for (let i = -14; i <= 14; i++) {
+  
+  // Laten we ~14 dagen terug en ~21 dagen vooruit kijken, maar we filteren de weekenden eruit!
+  for (let i = -14; i <= 21; i++) {
     const d = new Date(current);
     d.setDate(current.getDate() + i);
+    if (d.getDay() === 0 || d.getDay() === 6) continue; // Sla zondag(0) en zaterdag(6) over
+    
     const yyyy = d.getFullYear();
     const mm = String(d.getMonth() + 1).padStart(2, '0');
     const dd = String(d.getDate()).padStart(2, '0');
@@ -360,35 +380,128 @@ function StatisticsDashboard({ rides }) {
   
   const maxRides4Weeks = Math.max(...fourWeeksDates.map(date => rides.filter(r => r.ride_date === date).length), 0);
 
-  // --- SLIMME VOORSPELLINGS LOGICA (Laatste 6 weken) ---
-  const getDayEfficiency = (dayName) => {
-    const sixWeeksAgo = new Date();
-    sixWeeksAgo.setDate(sixWeeksAgo.getDate() - 42);
-    const sixWeeksAgoStr = sixWeeksAgo.toISOString().slice(0, 10);
-
-    const historicalRides = rides.filter(r => {
-      const d = new Date(r.ride_date);
-      const day = new Intl.DateTimeFormat("en-US", { weekday: "long" }).format(d);
-      return day === dayName && r.ride_date < todayString && r.ride_date >= sixWeeksAgoStr;
+  // --- VERBETERDE, DATUM-SPECIFIEKE VOORSPELLINGS LOGICA ZONDER WEEKENDEN ---
+  const predictionsData = useMemo(() => {
+    const result = {};
+    const today = parseLocalDate(todayString);
+    
+    // Algemene fallback berekenen (sluit weekenden uit zodat de schaal robuust blijft bij weinig data)
+    const pastWorkdayRides = rides.filter(r => {
+      if (r.ride_date >= todayString) return false;
+      const d = parseLocalDate(r.ride_date);
+      return d.getDay() !== 0 && d.getDay() !== 6;
     });
     
-    const uniqueDates = [...new Set(historicalRides.map(r => r.ride_date))];
-    if (uniqueDates.length === 0) return 0;
-    return Math.round(historicalRides.length / uniqueDates.length);
-  };
+    // We gebruiken de mediaan in plaats van average over alle dagen om extremen te dempen
+    const pastCountsPerDate = {};
+    pastWorkdayRides.forEach(r => {
+      pastCountsPerDate[r.ride_date] = (pastCountsPerDate[r.ride_date] || 0) + 1;
+    });
+    const globalMedian = calculateMedian(Object.values(pastCountsPerDate));
 
-  const predictions = useMemo(() => {
-    const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-    return dayNames.reduce((acc, name) => {
-      acc[name] = getDayEfficiency(name);
-      return acc;
-    }, {});
-  }, [rides, todayString]);
+    fourWeeksDates.forEach(dateStr => {
+      // We doen de dynamische pacing voorspelling alleen voor de toekomst
+      if (dateStr <= todayString) {
+        result[dateStr] = null;
+        return;
+      }
 
-  const maxPrediction = Math.max(...Object.values(predictions), 0);
-  
-  // Zorg dat de grafiek hoog genoeg is om de dagcapaciteit óók te tonen
-  const chartYMax = Math.max(maxPerDay, maxRides4Weeks, maxPrediction, dailyCapacity, 10);
+      const targetDate = parseLocalDate(dateStr);
+      const dayOfWeek = targetDate.getDay();
+      const daysUntil = Math.max(0, Math.floor((targetDate - today) / (1000 * 60 * 60 * 24)));
+      const dayName = new Intl.DateTimeFormat("en-US", { weekday: "long" }).format(targetDate);
+      const currentCount = rides.filter(r => r.ride_date === dateStr).length;
+
+      // Veilige vangnet voor weekenden
+      if (dayOfWeek === 0 || dayOfWeek === 6) {
+        result[dateStr] = { prediction: currentCount, low: currentCount, high: currentCount, confidence: "Gesloten", dataPoints: 0 };
+        return;
+      }
+
+      // 1. Historische data verzamelen voor deze specifieke weekdag (afgelopen 8 weken voor breder draagvlak)
+      const eightWeeksAgo = new Date(today);
+      eightWeeksAgo.setDate(today.getDate() - 56);
+      const historicalStr = eightWeeksAgo.toISOString().slice(0, 10);
+
+      const historicalRidesForDay = pastWorkdayRides.filter(r => {
+        const d = parseLocalDate(r.ride_date);
+        return new Intl.DateTimeFormat("en-US", { weekday: "long" }).format(d) === dayName && r.ride_date >= historicalStr;
+      });
+
+      const countsPerDate = {};
+      historicalRidesForDay.forEach(r => {
+        countsPerDate[r.ride_date] = (countsPerDate[r.ride_date] || 0) + 1;
+      });
+      const historicalTotals = Object.values(countsPerDate);
+      const dataPoints = historicalTotals.length;
+
+      // 2. Basislijn & Bandbreedte berekenen (Shrinkage toepassen bij weinig data)
+      let baseMedian = 0;
+      let mad = 0; // Median Absolute Deviation voor de onzekerheids-range
+
+      if (dataPoints >= 3) {
+        // Genoeg data: gebruik de eigen mediaan
+        baseMedian = calculateMedian(historicalTotals);
+        const deviations = historicalTotals.map(val => Math.abs(val - baseMedian));
+        mad = calculateMedian(deviations);
+      } else if (dataPoints > 0) {
+        // Weinig data: meng zachtjes met het globale gemiddelde om valse pieken/dalen te voorkomen
+        const localMedian = calculateMedian(historicalTotals);
+        baseMedian = Math.round((localMedian + globalMedian) / 2);
+        mad = Math.max(2, Math.round(baseMedian * 0.15));
+      } else {
+        // Geen specifieke data: val terug op globaal
+        baseMedian = globalMedian;
+        mad = Math.max(2, Math.round(baseMedian * 0.2));
+      }
+
+      if (mad === 0) mad = Math.max(2, Math.round(baseMedian * 0.15)); // Voorkom een range van 0
+
+      // 3. De Pacing (Boekingscurve) Correctie
+      // Hoe ver zijn we verwijderd van de datum? Bepaal het percentage ritten dat nog moet vallen.
+      let remainingFactor = 1.0;
+      if (daysUntil === 1) remainingFactor = 0.2;      // Morgen: we verwachten nog maar 20% groei
+      else if (daysUntil === 2) remainingFactor = 0.4; // Overmorgen: nog 40% groei
+      else if (daysUntil === 3) remainingFactor = 0.6; // etc.
+      else if (daysUntil <= 5) remainingFactor = 0.8;
+      else remainingFactor = 1.0;
+
+      // Hoeveel ritten verwachten we dat er NU normaliter al in de planning staan?
+      const expectedCurrentCount = baseMedian * (1 - remainingFactor);
+      
+      // Pacing adjustment: Ligt de huidige planning voor of achter op het normale schema?
+      // We dempen dit met 0.5 om te felle uitschieters te voorkomen als de datum nog ver weg is.
+      const pacingAdjustment = (currentCount - expectedCurrentCount) * 0.5;
+      
+      let finalPrediction = Math.round(baseMedian + pacingAdjustment);
+
+      // 4. Harde veiligheidslimieten: Prognose kan logischerwijs NOOIT onder de huidige stand zakken
+      finalPrediction = Math.max(currentCount, finalPrediction);
+
+      // 5. Betrouwbaarheidsmarges (Range) bepalen
+      let low = Math.max(currentCount, finalPrediction - mad);
+      let high = finalPrediction + mad;
+      let confidence = "Laag";
+
+      // Zet de confidence score op basis van databeschikbaarheid en plannings-horizon
+      if (dataPoints < 3) {
+        confidence = "Laag";
+        high += Math.round(baseMedian * 0.2); // Breder trekken wegens onzekerheid over de toekomst
+      } else {
+        if (daysUntil <= 2) confidence = "Hoog"; // Zeer dichtbij + genoeg data = sterke verwachting
+        else if (dataPoints >= 5 && daysUntil <= 7) confidence = "Middel";
+        else confidence = "Laag";
+      }
+
+      result[dateStr] = { prediction: finalPrediction, low, high, confidence, dataPoints };
+    });
+
+    return result;
+  }, [rides, todayString, fourWeeksDates]);
+
+  // Max voor Y-as van de grafiek dynamisch houden
+  const maxPredictionObj = Math.max(...Object.values(predictionsData).map(p => p ? p.high : 0), 0);
+  const chartYMax = Math.max(maxPerDay, maxRides4Weeks, maxPredictionObj, dailyCapacity, 10);
 
   // --- CAPACITEIT TEKORT ALARM ---
   const next7Days = fourWeeksDates.filter(d => d > todayString).slice(0, 7);
@@ -397,29 +510,30 @@ function StatisticsDashboard({ rides }) {
     let alertData = null;
 
     next7Days.forEach(date => {
-      const dayNameEn = new Intl.DateTimeFormat("en-US", { weekday: "long" }).format(new Date(date));
-      const prediction = predictions[dayNameEn] || 0;
-      const currentCount = rides.filter(r => r.ride_date === date).length;
+      const predData = predictionsData[date];
+      if (!predData) return;
       
-      const expectedTotal = Math.max(prediction, currentCount);
+      const expectedTotal = predData.prediction;
 
       if (expectedTotal > dailyCapacity) {
         const deficit = expectedTotal - dailyCapacity;
         if (deficit > highestDeficit) {
           highestDeficit = deficit;
           alertData = {
-            day: new Intl.DateTimeFormat("nl-NL", { weekday: "long" }).format(new Date(date)),
+            day: new Intl.DateTimeFormat("nl-NL", { weekday: "long" }).format(parseLocalDate(date)),
             date: date,
             expected: expectedTotal,
+            range: `${predData.low}-${predData.high}`,
+            confidence: predData.confidence,
             capacity: dailyCapacity,
             deficit: deficit,
-            driversShort: Math.ceil(deficit / maxRidesPerDriver) // Aantal chauffeurs dat je mist
+            driversShort: Math.ceil(deficit / maxRidesPerDriver)
           };
         }
       }
     });
     return alertData;
-  }, [predictions, next7Days, dailyCapacity, maxRidesPerDriver, rides]);
+  }, [predictionsData, next7Days, dailyCapacity, maxRidesPerDriver]);
   // ----------------------------------------
 
   const detailedDriverStats = driverOptions.map(driver => {
@@ -473,7 +587,7 @@ function StatisticsDashboard({ rides }) {
           <div>
             <div style={{ color: theme.isDark ? "#fca5a5" : "#b91c1c", fontWeight: 800, fontSize: 15 }}>Capaciteitstekort Verwacht</div>
             <div style={{ color: theme.textMain, fontSize: 14, marginTop: 4, lineHeight: 1.5 }}>
-              Op <strong><span style={{ textTransform: "capitalize" }}>{predictionAlert.day}</span> ({formatDate(predictionAlert.date).split(" ")[0]} {formatDate(predictionAlert.date).split(" ")[1]})</strong> worden <strong>{predictionAlert.expected} ritten</strong> verwacht, maar je limiet staat op {predictionAlert.capacity}. Je komt waarschijnlijk <strong>{predictionAlert.driversShort} chauffeur(s)</strong> tekort!
+              Op <strong><span style={{ textTransform: "capitalize" }}>{predictionAlert.day}</span> ({formatDate(predictionAlert.date).split(" ")[0]} {formatDate(predictionAlert.date).split(" ")[1]})</strong> voorspellen we <strong>{predictionAlert.expected} ritten</strong> (Marge: {predictionAlert.range}, Betrouwbaarheid: {predictionAlert.confidence}). Je plafond staat op {predictionAlert.capacity}. Je komt waarschijnlijk <strong>{predictionAlert.driversShort} chauffeur(s)</strong> tekort!
             </div>
           </div>
         </div>
@@ -566,11 +680,11 @@ function StatisticsDashboard({ rides }) {
 
       <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "2fr 1fr", gap: 24 }}>
         
-        {/* TIJDLIJN MET RODE CAPACITEITSLIJN */}
+        {/* TIJDLIJN MET RODE CAPACITEITSLIJN EN PACING-VOORSPELLING */}
         <div style={{ background: theme.cardBg, borderRadius: 24, border: `1px solid ${theme.border}`, padding: 24, boxShadow: theme.shadow }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10, marginBottom: 20 }}>
             <div>
-              <h3 style={{ margin: "0 0 4px 0", color: theme.textMain }}>Tijdlijn & Capaciteit (4 Weken)</h3>
+              <h3 style={{ margin: "0 0 4px 0", color: theme.textMain }}>Tijdlijn & Capaciteit (Pure Werkdagen)</h3>
               <div style={{ fontSize: 12, color: theme.textMuted, display: "flex", alignItems: "center", gap: 6 }}>
                 <span style={{ display: "inline-block", width: 12, height: 2, background: "#ef4444" }}></span> 
                 Rode lijn = maximale capaciteit ({dailyCapacity} ritten)
@@ -582,16 +696,17 @@ function StatisticsDashboard({ rides }) {
             {fourWeeksDates.map((date) => {
               const count = rides.filter(r => r.ride_date === date).length;
               const isToday = date === todayString;
-              const dateObj = new Date(date);
-              const dayNameEn = new Intl.DateTimeFormat("en-US", { weekday: "long" }).format(dateObj);
+              const dateObj = parseLocalDate(date);
               const weekdayStr = new Intl.DateTimeFormat("nl-NL", { weekday: "short" }).format(dateObj);
               const dayStr = parseInt(date.split('-')[2], 10);
               
-              const prediction = predictions[dayNameEn] || 0;
+              const pData = predictionsData[date];
+              const prediction = pData ? pData.prediction : 0;
+
               const heightPct = chartYMax > 0 ? (count / chartYMax) * 100 : 0;
               const predHeightPct = chartYMax > 0 ? (prediction / chartYMax) * 100 : 0;
               
-              const isOverCapacity = Math.max(count, prediction) > dailyCapacity && date > todayString;
+              const isOverCapacity = prediction > dailyCapacity && date > todayString;
 
               return (
                 <div key={date} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", gap: 6, minWidth: 26, height: "100%" }}>
@@ -600,7 +715,7 @@ function StatisticsDashboard({ rides }) {
                     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", lineHeight: 1.1 }}>
                       <div style={{ color: count > dailyCapacity ? "#ef4444" : theme.textMain, fontWeight: 900, fontSize: 12 }} title={`${count} al gepland`}>{count > 0 ? count : "0"}</div>
                       {prediction > 0 && (
-                        <div style={{ color: prediction > dailyCapacity ? "#ef4444" : theme.textMuted, fontSize: 10, fontWeight: 700, marginTop: 4 }} title={`Historisch verwacht: ~${prediction}`}>
+                        <div style={{ color: prediction > dailyCapacity ? "#ef4444" : theme.textMuted, fontSize: 10, fontWeight: 700, marginTop: 4, cursor: "help" }} title={`Verwacht Eindtotaal: ~${prediction}\nRange: ${pData?.low} tot ${pData?.high} ritten\nBetrouwbaarheid: ${pData?.confidence}`}>
                           (~{prediction})
                         </div>
                       )}
@@ -611,14 +726,11 @@ function StatisticsDashboard({ rides }) {
                   
                   <div style={{ width: "100%", maxWidth: 30, background: theme.chartBg, borderRadius: "4px 4px 0 0", height: "120px", position: "relative", display: "flex", alignItems: "flex-end" }}>
                     
-                    {/* RODE CAPACITEITSLIJN (Dwars door de balk) */}
                     <div style={{ position: "absolute", bottom: `${(dailyCapacity / chartYMax) * 100}%`, left: -2, right: -2, height: 2, background: "#ef4444", zIndex: 10 }} title={`Limiet: ${dailyCapacity}`} />
 
-                    {/* Voorspellings-schaduw */}
                     {date > todayString && (
-                      <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, background: isOverCapacity ? "rgba(239, 68, 68, 0.15)" : (theme.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)"), height: `${predHeightPct}%`, borderTop: `1px dashed ${isOverCapacity ? "#ef4444" : theme.textMuted}`, zIndex: 1 }} title={`Verwacht: ${prediction} ritten`} />
+                      <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, background: isOverCapacity ? "rgba(239, 68, 68, 0.15)" : (theme.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)"), height: `${predHeightPct}%`, borderTop: `1px dashed ${isOverCapacity ? "#ef4444" : theme.textMuted}`, zIndex: 1 }} title={`Verwacht Eindtotaal: ~${prediction} (Range: ${pData?.low}-${pData?.high})`} />
                     )}
-                    {/* Echte geplande data */}
                     <div style={{ width: "100%", background: isToday ? theme.chartBar : (count > dailyCapacity ? "#ef4444" : (theme.isDark ? "#475569" : "#cbd5e1")), height: `${heightPct}%`, transition: "height 0.8s cubic-bezier(0.4, 0, 0.2, 1)", borderRadius: "4px 4px 0 0", opacity: isToday ? 1 : 0.8, zIndex: 2 }} />
                   </div>
                   
