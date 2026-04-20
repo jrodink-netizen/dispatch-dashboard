@@ -47,7 +47,9 @@ const darkTheme = {
 
 const ThemeContext = createContext();
 const rideStatuses = ["Gepland", "Bevestigd", "Onderweg", "Afgerond"];
-const driverOptions = ["Erwin", "Julian", "Gerben", "Hans", "Fiona"];
+
+// HIER STAAT JE VASTE LIJST (Hans is verwijderd!)
+const driverOptions = ["Erwin", "Julian", "Gerben", "Fiona"];
 
 // --- Helper Functies ---
 
@@ -323,11 +325,27 @@ function StatCard({ title, value, sub }) {
   );
 }
 
-// ---------------- UITGEBREIDE STATISTIEKEN COMPONENT MET CAPACITEIT & ROBUUSTE VOORSPELLING ----------------
+// ---------------- UITGEBREIDE STATISTIEKEN COMPONENT ----------------
 function StatisticsDashboard({ rides }) {
   const { theme } = useContext(ThemeContext);
   const isMobile = useWindowWidth() < 700;
   
+  // Combineer actuele chauffeurs met historische chauffeurs (die al ritten hebben gereden)
+  const allHistoricalDrivers = useMemo(() => {
+    const historical = rides.map(r => r.driver_name).filter(Boolean);
+    return [...new Set([...driverOptions, ...historical])];
+  }, [rides]);
+
+  // Dynamisch kleurenpalet toewijzen aan chauffeurs
+  const driverColors = useMemo(() => {
+    const palette = ["#ef4444", "#3b82f6", "#10b981", "#f59e0b", "#8b5cf6", "#ec4899", "#14b8a6", "#f97316", "#06b6d4"];
+    const colors = {};
+    allHistoricalDrivers.forEach((d, i) => {
+      colors[d] = palette[i % palette.length];
+    });
+    return colors;
+  }, [allHistoricalDrivers]);
+
   // --- CAPACITEIT STATEN ---
   const [activeDrivers, setActiveDrivers] = useState(2); 
   const [maxRidesPerDriver, setMaxRidesPerDriver] = useState(8);
@@ -342,14 +360,6 @@ function StatisticsDashboard({ rides }) {
   const otp = otpRides.length > 0 ? Math.round((onTimeCount / otpRides.length) * 100) : 0;
   const dashArray = `${otp}, 100`;
 
-  const driverColors = {
-    "Erwin": "#ef4444",   // Rood
-    "Julian": "#3b82f6",  // Blauw
-    "Gerben": "#10b981",  // Groen
-    "Hans": "#f59e0b",    // Oranje
-    "Fiona": "#8b5cf6"    // Paars
-  };
-
   const routes = rides.filter(r => r.pickup_location && r.delivery_location).map(r => `${r.pickup_location} → ${r.delivery_location}`);
   const routeCounts = {};
   routes.forEach(r => routeCounts[r] = (routeCounts[r] || 0) + 1);
@@ -359,11 +369,10 @@ function StatisticsDashboard({ rides }) {
   const fourWeeksDates = [];
   const current = new Date();
   
-  // Laten we ~14 dagen terug en ~21 dagen vooruit kijken, maar we filteren de weekenden eruit!
   for (let i = -14; i <= 21; i++) {
     const d = new Date(current);
     d.setDate(current.getDate() + i);
-    if (d.getDay() === 0 || d.getDay() === 6) continue; // Sla zondag(0) en zaterdag(6) over
+    if (d.getDay() === 0 || d.getDay() === 6) continue; 
     
     const yyyy = d.getFullYear();
     const mm = String(d.getMonth() + 1).padStart(2, '0');
@@ -380,19 +389,16 @@ function StatisticsDashboard({ rides }) {
   
   const maxRides4Weeks = Math.max(...fourWeeksDates.map(date => rides.filter(r => r.ride_date === date).length), 0);
 
-  // --- VERBETERDE, DATUM-SPECIFIEKE VOORSPELLINGS LOGICA ZONDER WEEKENDEN ---
   const predictionsData = useMemo(() => {
     const result = {};
     const today = parseLocalDate(todayString);
     
-    // Algemene fallback berekenen (sluit weekenden uit zodat de schaal robuust blijft bij weinig data)
     const pastWorkdayRides = rides.filter(r => {
       if (r.ride_date >= todayString) return false;
       const d = parseLocalDate(r.ride_date);
       return d.getDay() !== 0 && d.getDay() !== 6;
     });
     
-    // We gebruiken de mediaan in plaats van average over alle dagen om extremen te dempen
     const pastCountsPerDate = {};
     pastWorkdayRides.forEach(r => {
       pastCountsPerDate[r.ride_date] = (pastCountsPerDate[r.ride_date] || 0) + 1;
@@ -400,7 +406,6 @@ function StatisticsDashboard({ rides }) {
     const globalMedian = calculateMedian(Object.values(pastCountsPerDate));
 
     fourWeeksDates.forEach(dateStr => {
-      // We doen de dynamische pacing voorspelling alleen voor de toekomst
       if (dateStr <= todayString) {
         result[dateStr] = null;
         return;
@@ -412,13 +417,11 @@ function StatisticsDashboard({ rides }) {
       const dayName = new Intl.DateTimeFormat("en-US", { weekday: "long" }).format(targetDate);
       const currentCount = rides.filter(r => r.ride_date === dateStr).length;
 
-      // Veilige vangnet voor weekenden
       if (dayOfWeek === 0 || dayOfWeek === 6) {
         result[dateStr] = { prediction: currentCount, low: currentCount, high: currentCount, confidence: "Gesloten", dataPoints: 0 };
         return;
       }
 
-      // 1. Historische data verzamelen voor deze specifieke weekdag (afgelopen 8 weken voor breder draagvlak)
       const eightWeeksAgo = new Date(today);
       eightWeeksAgo.setDate(today.getDate() - 56);
       const historicalStr = eightWeeksAgo.toISOString().slice(0, 10);
@@ -435,60 +438,46 @@ function StatisticsDashboard({ rides }) {
       const historicalTotals = Object.values(countsPerDate);
       const dataPoints = historicalTotals.length;
 
-      // 2. Basislijn & Bandbreedte berekenen (Shrinkage toepassen bij weinig data)
       let baseMedian = 0;
-      let mad = 0; // Median Absolute Deviation voor de onzekerheids-range
+      let mad = 0; 
 
       if (dataPoints >= 3) {
-        // Genoeg data: gebruik de eigen mediaan
         baseMedian = calculateMedian(historicalTotals);
         const deviations = historicalTotals.map(val => Math.abs(val - baseMedian));
         mad = calculateMedian(deviations);
       } else if (dataPoints > 0) {
-        // Weinig data: meng zachtjes met het globale gemiddelde om valse pieken/dalen te voorkomen
         const localMedian = calculateMedian(historicalTotals);
         baseMedian = Math.round((localMedian + globalMedian) / 2);
         mad = Math.max(2, Math.round(baseMedian * 0.15));
       } else {
-        // Geen specifieke data: val terug op globaal
         baseMedian = globalMedian;
         mad = Math.max(2, Math.round(baseMedian * 0.2));
       }
 
-      if (mad === 0) mad = Math.max(2, Math.round(baseMedian * 0.15)); // Voorkom een range van 0
+      if (mad === 0) mad = Math.max(2, Math.round(baseMedian * 0.15)); 
 
-      // 3. De Pacing (Boekingscurve) Correctie
-      // Hoe ver zijn we verwijderd van de datum? Bepaal het percentage ritten dat nog moet vallen.
       let remainingFactor = 1.0;
-      if (daysUntil === 1) remainingFactor = 0.2;      // Morgen: we verwachten nog maar 20% groei
-      else if (daysUntil === 2) remainingFactor = 0.4; // Overmorgen: nog 40% groei
-      else if (daysUntil === 3) remainingFactor = 0.6; // etc.
+      if (daysUntil === 1) remainingFactor = 0.2;      
+      else if (daysUntil === 2) remainingFactor = 0.4; 
+      else if (daysUntil === 3) remainingFactor = 0.6; 
       else if (daysUntil <= 5) remainingFactor = 0.8;
       else remainingFactor = 1.0;
 
-      // Hoeveel ritten verwachten we dat er NU normaliter al in de planning staan?
       const expectedCurrentCount = baseMedian * (1 - remainingFactor);
-      
-      // Pacing adjustment: Ligt de huidige planning voor of achter op het normale schema?
-      // We dempen dit met 0.5 om te felle uitschieters te voorkomen als de datum nog ver weg is.
       const pacingAdjustment = (currentCount - expectedCurrentCount) * 0.5;
       
       let finalPrediction = Math.round(baseMedian + pacingAdjustment);
-
-      // 4. Harde veiligheidslimieten: Prognose kan logischerwijs NOOIT onder de huidige stand zakken
       finalPrediction = Math.max(currentCount, finalPrediction);
 
-      // 5. Betrouwbaarheidsmarges (Range) bepalen
       let low = Math.max(currentCount, finalPrediction - mad);
       let high = finalPrediction + mad;
       let confidence = "Laag";
 
-      // Zet de confidence score op basis van databeschikbaarheid en plannings-horizon
       if (dataPoints < 3) {
         confidence = "Laag";
-        high += Math.round(baseMedian * 0.2); // Breder trekken wegens onzekerheid over de toekomst
+        high += Math.round(baseMedian * 0.2); 
       } else {
-        if (daysUntil <= 2) confidence = "Hoog"; // Zeer dichtbij + genoeg data = sterke verwachting
+        if (daysUntil <= 2) confidence = "Hoog"; 
         else if (dataPoints >= 5 && daysUntil <= 7) confidence = "Middel";
         else confidence = "Laag";
       }
@@ -499,11 +488,9 @@ function StatisticsDashboard({ rides }) {
     return result;
   }, [rides, todayString, fourWeeksDates]);
 
-  // Max voor Y-as van de grafiek dynamisch houden
   const maxPredictionObj = Math.max(...Object.values(predictionsData).map(p => p ? p.high : 0), 0);
   const chartYMax = Math.max(maxPerDay, maxRides4Weeks, maxPredictionObj, dailyCapacity, 10);
 
-  // --- CAPACITEIT TEKORT ALARM ---
   const next7Days = fourWeeksDates.filter(d => d > todayString).slice(0, 7);
   const predictionAlert = useMemo(() => {
     let highestDeficit = 0;
@@ -534,9 +521,8 @@ function StatisticsDashboard({ rides }) {
     });
     return alertData;
   }, [predictionsData, next7Days, dailyCapacity, maxRidesPerDriver]);
-  // ----------------------------------------
 
-  const detailedDriverStats = driverOptions.map(driver => {
+  const detailedDriverStats = allHistoricalDrivers.map(driver => {
     const dRides = rides.filter(r => r.driver_name === driver);
     const dTotal = dRides.length;
     const dCompleted = dRides.filter(r => r.status === "Afgerond").length;
@@ -546,7 +532,7 @@ function StatisticsDashboard({ rides }) {
     const dOtp = dOtpRides.length > 0 ? Math.round((dOnTime / dOtpRides.length) * 100) : 0;
 
     return { name: driver, total: dTotal, completed: dCompleted, otp: dOtp, otpCount: dOtpRides.length };
-  });
+  }).filter(stat => stat.total > 0 || driverOptions.includes(stat.name));
 
   const statusCounts = rideStatuses.map((status) => ({ status, count: rides.filter((r) => r.status === status).length }));
 
@@ -624,10 +610,12 @@ function StatisticsDashboard({ rides }) {
         <p style={{ margin: "0 0 20px 0", color: theme.textMuted, fontSize: 13 }}>Dagelijks overzicht van geplande en afgeronde ritten, opgesplitst per chauffeur.</p>
         
         <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 24 }}>
-          {driverOptions.map(driver => (
+          {allHistoricalDrivers.map(driver => (
             <div key={driver} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <div style={{ width: 12, height: 12, borderRadius: 3, background: driverColors[driver] || theme.chartBar }} />
-              <span style={{ fontSize: 13, color: theme.textMuted, fontWeight: 700 }}>{driver}</span>
+              <div style={{ width: 12, height: 12, borderRadius: 3, background: driverColors[driver] }} />
+              <span style={{ fontSize: 13, color: theme.textMuted, fontWeight: 700 }}>
+                {driver} {!driverOptions.includes(driver) && "(Inactief)"}
+              </span>
             </div>
           ))}
         </div>
@@ -647,7 +635,7 @@ function StatisticsDashboard({ rides }) {
                   
                   <div style={{ height: "150px", width: "100%", maxWidth: 45, display: "flex", flexDirection: "column", justifyContent: "flex-end", background: theme.chartBg, borderRadius: 6, overflow: "hidden" }}>
                     <div style={{ height: `${heightPct}%`, width: "100%", display: "flex", flexDirection: "column", justifyContent: "flex-end", transition: "height 0.8s ease" }}>
-                      {driverOptions.map(driver => {
+                      {allHistoricalDrivers.map(driver => {
                         const count = dayRides.filter(r => r.driver_name === driver).length;
                         if (count === 0) return null;
                         
@@ -659,7 +647,7 @@ function StatisticsDashboard({ rides }) {
                             style={{ 
                               height: `${segmentPct}%`,
                               width: "100%", 
-                              background: driverColors[driver] || theme.chartBar,
+                              background: driverColors[driver],
                               borderTop: "1px solid rgba(255,255,255,0.2)"
                             }} 
                           />
@@ -781,8 +769,8 @@ function StatisticsDashboard({ rides }) {
             {detailedDriverStats.map(stat => (
               <tr key={stat.name} style={{ borderTop: `1px solid ${theme.border}` }}>
                 <td style={{ padding: "14px 16px", color: theme.textMain, fontWeight: 700, display: "flex", alignItems: "center", gap: 10 }}>
-                  <div style={{ width: 10, height: 10, borderRadius: "50%", background: driverColors[stat.name] || theme.chartBar }} />
-                  {stat.name}
+                  <div style={{ width: 10, height: 10, borderRadius: "50%", background: driverColors[stat.name] }} />
+                  {stat.name} {!driverOptions.includes(stat.name) && <span style={{fontSize: 11, color: theme.textMuted}}>(Inactief)</span>}
                 </td>
                 <td style={{ padding: "14px 16px", color: theme.textMain }}>{stat.total} ritten</td>
                 <td style={{ padding: "14px 16px", color: theme.textMain }}>
@@ -867,7 +855,7 @@ function AuthScreen() {
   );
 }
 
-function RideEditor({ selectedRide, onSave, onDelete, onNew, saving, onShift, onMarkPrinted }) {
+function RideEditor({ selectedRide, onSave, onDelete, onNew, saving, onShift, onMarkPrinted, frequentLocations }) {
   const windowWidth = useWindowWidth();
   const isSmall = windowWidth < 700;
   const { theme } = useContext(ThemeContext);
@@ -894,10 +882,21 @@ function RideEditor({ selectedRide, onSave, onDelete, onNew, saving, onShift, on
   const [isReturnDraft, setIsReturnDraft] = useState(false);
   const [shiftMinutes, setShiftMinutes] = useState(30);
 
+  const [showPickupDropdown, setShowPickupDropdown] = useState(false);
+  const [showDeliveryDropdown, setShowDeliveryDropdown] = useState(false);
+
   useEffect(() => {
     setFormData(createFormState(selectedRide));
     setIsReturnDraft(false);
   }, [selectedRide]);
+
+  // Als we een rit selecteren die is toegewezen aan iemand die niet meer in het vaste lijstje staat,
+  // Zorgen we dat deze toch netjes in het formulier blijft staan.
+  useEffect(() => {
+    if (!selectedRide && !formData.driver_name && driverOptions.length > 0) {
+      updateField("driver_name", driverOptions[0]);
+    }
+  }, [selectedRide, formData.driver_name]);
 
   function updateField(field, value) {
     setFormData((prev) => {
@@ -915,6 +914,9 @@ function RideEditor({ selectedRide, onSave, onDelete, onNew, saving, onShift, on
     if (!formData.ride_date || !formData.departure_time || !formData.pickup_location.trim() || !formData.delivery_location.trim()) {
       return alert("Vul datum, vertrektijd, van-locatie en naar-locatie in.");
     }
+    if (!formData.driver_name) {
+      return alert("Selecteer een chauffeur.");
+    }
     onSave({ ...formData, pickup_location: formData.pickup_location.trim(), delivery_location: formData.delivery_location.trim(), cargo: formData.cargo.trim(), notes: formData.notes.trim() });
   }
 
@@ -928,6 +930,16 @@ function RideEditor({ selectedRide, onSave, onDelete, onNew, saving, onShift, on
   }
 
   const isEditingOriginalRide = Boolean(selectedRide?.id) && !isReturnDraft;
+
+  const dropdownStyle = {
+    position: "absolute", top: "100%", right: 0, zIndex: 10, background: theme.cardBg, 
+    border: `1px solid ${theme.border}`, borderRadius: 10, boxShadow: theme.shadow,
+    marginTop: 4, width: "200px", overflow: "hidden"
+  };
+  const dropdownItemStyle = {
+    padding: "10px 12px", cursor: "pointer", fontSize: 13, color: theme.textMain,
+    borderBottom: `1px solid ${theme.border}`
+  };
 
   return (
     <div style={{ background: theme.cardBg, borderRadius: 20, border: `1px solid ${theme.border}`, boxShadow: theme.shadow, padding: 16, position: windowWidth < 1000 ? "static" : "sticky", top: 98, transition: "all 0.3s ease" }}>
@@ -944,7 +956,14 @@ function RideEditor({ selectedRide, onSave, onDelete, onNew, saving, onShift, on
 
       <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-          <label style={getLabelStyle(theme)}>Chauffeur<select value={formData.driver_name} onChange={(e) => updateField("driver_name", e.target.value)} style={getInputStyle(theme)}>{driverOptions.map((driver) => (<option key={driver} value={driver}>{driver}</option>))}</select></label>
+          <label style={getLabelStyle(theme)}>Chauffeur
+            <select value={formData.driver_name} onChange={(e) => updateField("driver_name", e.target.value)} style={getInputStyle(theme)}>
+              {!driverOptions.includes(formData.driver_name) && formData.driver_name && (
+                <option value={formData.driver_name}>{formData.driver_name} (Inactief)</option>
+              )}
+              {driverOptions.map((driver) => (<option key={driver} value={driver}>{driver}</option>))}
+            </select>
+          </label>
           <label style={getLabelStyle(theme)}>Datum<input type="date" value={formData.ride_date} onChange={(e) => updateField("ride_date", e.target.value)} style={getInputStyle(theme)} /></label>
         </div>
 
@@ -958,8 +977,66 @@ function RideEditor({ selectedRide, onSave, onDelete, onNew, saving, onShift, on
           <label style={getLabelStyle(theme)}>Echte Tijd<input type="time" value={formData.actual_arrival_time} onChange={(e) => updateField("actual_arrival_time", e.target.value)} style={{ ...getInputStyle(theme), background: formData.status === "Afgerond" ? (theme.isDark ? "rgba(16, 185, 129, 0.1)" : "#ecfdf5") : theme.inputBg, border: formData.status === "Afgerond" ? "1px solid #10b981" : `1px solid ${theme.inputBorder}` }} /></label>
         </div>
 
-        <label style={getLabelStyle(theme)}>Van locatie<input type="text" value={formData.pickup_location} onChange={(e) => updateField("pickup_location", e.target.value)} placeholder="Bijv. Amsterdam" style={getInputStyle(theme)} /></label>
-        <label style={getLabelStyle(theme)}>Naar locatie<input type="text" value={formData.delivery_location} onChange={(e) => updateField("delivery_location", e.target.value)} placeholder="Bijv. Rotterdam" style={getInputStyle(theme)} /></label>
+        <label style={{ ...getLabelStyle(theme), position: "relative" }}>
+          Van locatie
+          <div style={{ display: "flex", gap: 8 }}>
+            <input type="text" value={formData.pickup_location} onChange={(e) => updateField("pickup_location", e.target.value)} placeholder="Bijv. Amsterdam" style={getInputStyle(theme)} />
+            <button 
+              type="button" 
+              onClick={() => { setShowPickupDropdown(!showPickupDropdown); setShowDeliveryDropdown(false); }}
+              style={{ ...getSecondaryButtonStyle(theme), padding: "0 14px", fontSize: 18, fontWeight: 900 }}
+              title="Veelgebruikte locaties (afgelopen 14 dagen)"
+            >+</button>
+          </div>
+          {showPickupDropdown && (
+            <div style={dropdownStyle}>
+              {frequentLocations.length > 0 ? frequentLocations.map(loc => (
+                <div 
+                  key={loc} 
+                  style={dropdownItemStyle}
+                  onClick={() => { updateField("pickup_location", loc); setShowPickupDropdown(false); }}
+                  onMouseEnter={(e) => e.target.style.background = theme.rowSelected}
+                  onMouseLeave={(e) => e.target.style.background = "transparent"}
+                >
+                  {loc}
+                </div>
+              )) : (
+                <div style={{...dropdownItemStyle, color: theme.textMuted, cursor: 'default'}}>Geen recente data</div>
+              )}
+            </div>
+          )}
+        </label>
+
+        <label style={{ ...getLabelStyle(theme), position: "relative" }}>
+          Naar locatie
+          <div style={{ display: "flex", gap: 8 }}>
+            <input type="text" value={formData.delivery_location} onChange={(e) => updateField("delivery_location", e.target.value)} placeholder="Bijv. Rotterdam" style={getInputStyle(theme)} />
+            <button 
+              type="button" 
+              onClick={() => { setShowDeliveryDropdown(!showDeliveryDropdown); setShowPickupDropdown(false); }}
+              style={{ ...getSecondaryButtonStyle(theme), padding: "0 14px", fontSize: 18, fontWeight: 900 }}
+              title="Veelgebruikte locaties (afgelopen 14 dagen)"
+            >+</button>
+          </div>
+          {showDeliveryDropdown && (
+            <div style={dropdownStyle}>
+              {frequentLocations.length > 0 ? frequentLocations.map(loc => (
+                <div 
+                  key={loc} 
+                  style={dropdownItemStyle}
+                  onClick={() => { updateField("delivery_location", loc); setShowDeliveryDropdown(false); }}
+                  onMouseEnter={(e) => e.target.style.background = theme.rowSelected}
+                  onMouseLeave={(e) => e.target.style.background = "transparent"}
+                >
+                  {loc}
+                </div>
+              )) : (
+                <div style={{...dropdownItemStyle, color: theme.textMuted, cursor: 'default'}}>Geen recente data</div>
+              )}
+            </div>
+          )}
+        </label>
+
         <label style={getLabelStyle(theme)}>Kenteken / Lading<input type="text" value={formData.cargo} onChange={(e) => updateField("cargo", e.target.value)} placeholder="Bijv. V-123-AB" style={getInputStyle(theme)} /></label>
         <label style={getLabelStyle(theme)}>Notities<textarea value={formData.notes} onChange={(e) => updateField("notes", e.target.value)} placeholder="Extra instructies" style={{ ...getInputStyle(theme), minHeight: 60, resize: "vertical" }} /></label>
 
@@ -1048,13 +1125,22 @@ function RideTable({ rides, selectedRideId, onSelectRide, search, setSearch, sta
   const thStyle = { padding: "14px 16px", fontSize: 13, fontWeight: 800, color: theme.textMuted };
   const tdStyle = { padding: "14px 16px", verticalAlign: "middle", color: theme.textMain, fontSize: 14 };
   const locationLinkStyle = { color: theme.isDark ? "#60a5fa" : "#2563eb", textDecoration: "none", fontWeight: 700 };
+  
+  const allFilterDrivers = useMemo(() => {
+    return [...new Set([...driverOptions, ...rides.map(r => r.driver_name)])].filter(Boolean);
+  }, [rides]);
 
   return (
     <div style={{ background: theme.cardBg, borderRadius: 24, border: `1px solid ${theme.border}`, boxShadow: theme.shadow, overflow: "hidden", transition: "all 0.3s ease" }}>
       <div style={{ padding: 20, borderBottom: `1px solid ${theme.border}`, transition: "border-color 0.3s ease" }}>
         <div style={{ display: "grid", gridTemplateColumns: isNarrow ? "1fr" : "1.4fr 1fr 1fr 1fr auto", gap: 12 }}>
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Zoek op locatie of notities..." style={getInputStyle(theme)} />
-          <select value={driverFilter} onChange={(e) => setDriverFilter(e.target.value)} style={getInputStyle(theme)}><option value="all">Alle chauffeurs</option>{driverOptions.map((driver) => (<option key={driver} value={driver}>{driver}</option>))}</select>
+          <select value={driverFilter} onChange={(e) => setDriverFilter(e.target.value)} style={getInputStyle(theme)}>
+            <option value="all">Alle chauffeurs</option>
+            {allFilterDrivers.map((driver) => (
+              <option key={driver} value={driver}>{driver} {!driverOptions.includes(driver) && "(Inactief)"}</option>
+            ))}
+          </select>
           <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={getInputStyle(theme)}><option value="all">Alle statussen</option>{rideStatuses.map((status) => (<option key={status} value={status}>{status}</option>))}</select>
           <input type="date" value={dateFilter} onChange={(e) => setDateFilter(e.target.value)} style={getInputStyle(theme)} />
           <button type="button" onClick={clearFilters} style={getSecondaryButtonStyle(theme)}>Wissen</button>
@@ -1128,6 +1214,27 @@ function Dashboard({ session }) {
   
   const [leftWidthPct, setLeftWidthPct] = useState(70);
 
+  const frequentLocations = useMemo(() => {
+    const today = new Date();
+    const twoWeeksAgo = new Date();
+    twoWeeksAgo.setDate(today.getDate() - 14);
+
+    const todayStr = today.toISOString().slice(0, 10);
+    const twoWeeksAgoStr = twoWeeksAgo.toISOString().slice(0, 10);
+
+    const recentRides = rides.filter(r => r.ride_date >= twoWeeksAgoStr && r.ride_date <= todayStr);
+
+    const counts = {};
+    recentRides.forEach(r => {
+      const pickup = r.pickup_location?.trim();
+      const delivery = r.delivery_location?.trim();
+      if (pickup) counts[pickup] = (counts[pickup] || 0) + 1;
+      if (delivery) counts[delivery] = (counts[delivery] || 0) + 1;
+    });
+
+    return Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 7).map(entry => entry[0]);
+  }, [rides]);
+
   async function fetchRidesData() {
     const { data, error } = await supabase
       .from("rides")
@@ -1184,11 +1291,16 @@ function Dashboard({ session }) {
   async function saveRide(ride) {
     setSaving(true);
     let apiCall;
+    
     if (ride.id) {
       apiCall = supabase.from("rides").update(ride).eq("id", ride.id);
     } else {
       const { id, ...rideWithoutId } = ride;
-      apiCall = supabase.from("rides").insert(rideWithoutId);
+      const newRideWithTimestamp = {
+        ...rideWithoutId,
+        created_at: new Date().toISOString() 
+      };
+      apiCall = supabase.from("rides").insert(newRideWithTimestamp);
     }
 
     const { data, error } = await apiCall.select().single();
@@ -1333,6 +1445,7 @@ function Dashboard({ session }) {
               saving={saving}
               onShift={shiftSubsequentRides}
               onMarkPrinted={markWorkcardPrinted}
+              frequentLocations={frequentLocations} 
             />
           </div>
         )}
