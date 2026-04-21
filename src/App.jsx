@@ -48,7 +48,7 @@ const darkTheme = {
 const ThemeContext = createContext();
 const rideStatuses = ["Gepland", "Bevestigd", "Onderweg", "Afgerond"];
 
-// HIER STAAT JE VASTE LIJST (Hans is verwijderd!)
+// HIER STAAT JE VASTE LIJST CHAUFFEURS
 const driverOptions = ["Erwin", "Julian", "Gerben", "Fiona"];
 
 // --- Helper Functies ---
@@ -84,13 +84,29 @@ function useWindowWidth() {
   return windowWidth;
 }
 
+// --- VERBETERDE SORTEERFUNCTIE (Met Tie-breakers) ---
 function sortRides(list) {
   return [...list].sort((a, b) => {
+    // 1. Sorteer op Datum
     const dateCompare = a.ride_date.localeCompare(b.ride_date);
     if (dateCompare !== 0) return dateCompare;
-    return a.departure_time.localeCompare(b.departure_time);
+
+    // 2. Sorteer op Vertrektijd (Zet ritten zonder tijd netjes achteraan)
+    const timeA = a.departure_time || "23:59"; 
+    const timeB = b.departure_time || "23:59";
+    const timeCompare = timeA.localeCompare(timeB);
+    if (timeCompare !== 0) return timeCompare;
+
+    // 3. TIE-BREAKER 1: Sorteer alfabetisch op Chauffeur
+    const driverCompare = (a.driver_name || "").localeCompare(b.driver_name || "");
+    if (driverCompare !== 0) return driverCompare;
+
+    // 4. TIE-BREAKER 2: Als álles hetzelfde is, forceer dan de originele volgorde (ID of aanmaakdatum)
+    // Dit zorgt ervoor dat ze NOOIT willekeurig van plek wisselen bij het opslaan.
+    return (a.created_at || "").localeCompare(b.created_at || "");
   });
 }
+// ----------------------------------------------------
 
 function formatDate(dateString) {
   if (!dateString) return "";
@@ -855,7 +871,7 @@ function AuthScreen() {
   );
 }
 
-function RideEditor({ selectedRide, onSave, onDelete, onNew, saving, onShift, onMarkPrinted, frequentLocations }) {
+function RideEditor({ selectedRide, onSave, onDelete, onNew, saving, onShift, onMarkPrinted, frequentLocations, driverOptions }) {
   const windowWidth = useWindowWidth();
   const isSmall = windowWidth < 700;
   const { theme } = useContext(ThemeContext);
@@ -864,7 +880,7 @@ function RideEditor({ selectedRide, onSave, onDelete, onNew, saving, onShift, on
     const vandaag = new Date().toISOString().slice(0, 10);
     return {
       id: ride?.id || null, 
-      driver_name: ride?.driver_name || driverOptions[0], 
+      driver_name: ride?.driver_name || "", 
       ride_date: ride?.ride_date || vandaag, 
       departure_time: ride?.departure_time || "", 
       arrival_time: ride?.arrival_time || "", 
@@ -884,19 +900,18 @@ function RideEditor({ selectedRide, onSave, onDelete, onNew, saving, onShift, on
 
   const [showPickupDropdown, setShowPickupDropdown] = useState(false);
   const [showDeliveryDropdown, setShowDeliveryDropdown] = useState(false);
+  const [isFetchingRDW, setIsFetchingRDW] = useState(false);
 
   useEffect(() => {
     setFormData(createFormState(selectedRide));
     setIsReturnDraft(false);
   }, [selectedRide]);
 
-  // Als we een rit selecteren die is toegewezen aan iemand die niet meer in het vaste lijstje staat,
-  // Zorgen we dat deze toch netjes in het formulier blijft staan.
   useEffect(() => {
-    if (!selectedRide && !formData.driver_name && driverOptions.length > 0) {
+    if (!selectedRide && !formData.driver_name && driverOptions?.length > 0) {
       updateField("driver_name", driverOptions[0]);
     }
-  }, [selectedRide, formData.driver_name]);
+  }, [selectedRide, formData.driver_name, driverOptions]);
 
   function updateField(field, value) {
     setFormData((prev) => {
@@ -909,14 +924,58 @@ function RideEditor({ selectedRide, onSave, onDelete, onNew, saving, onShift, on
     });
   }
 
+  // --- UITGEBREIDE RDW API KOPPELING (Inclusief Gewicht) ---
+  async function fetchCarDetails() {
+    if (!formData.cargo) return;
+    
+    const cleanKenteken = formData.cargo.replace(/[^A-Z0-9]/ig, '').toUpperCase();
+    
+    if (cleanKenteken.length !== 6) {
+      alert("Voer eerst een geldig kenteken in (6 tekens).");
+      return;
+    }
+
+    setIsFetchingRDW(true);
+    try {
+      const response = await fetch(`https://opendata.rdw.nl/resource/m9d7-ebf2.json?kenteken=${cleanKenteken}`);
+      const data = await response.json();
+      
+      if (data && data.length > 0) {
+        const merk = data[0].merk;
+        const model = data[0].handelsbenaming;
+        // Pakt Massa Rijklaar, of Ledig Gewicht als rijklaar niet bekend is
+        const gewicht = data[0].massa_rijklaar || data[0].massa_ledig_voertuig || "Onbekend";
+        
+        // Formatteer de tekst: KENT - MERK MODEL (GEWICHT kg)
+        updateField("cargo", `${formData.cargo} - ${merk} ${model} (${gewicht} kg)`);
+      } else {
+        alert("Kenteken niet gevonden bij de RDW.");
+      }
+    } catch (error) {
+      alert("Kon RDW data niet ophalen.");
+    } finally {
+      setIsFetchingRDW(false);
+    }
+  }
+
   function handleSubmit(e) {
     e.preventDefault();
     if (!formData.ride_date || !formData.departure_time || !formData.pickup_location.trim() || !formData.delivery_location.trim()) {
-      return alert("Vul datum, vertrektijd, van-locatie en naar-locatie in.");
+      return alert("Vul alle verplichte velden in.");
     }
-    if (!formData.driver_name) {
-      return alert("Selecteer een chauffeur.");
+    
+    const isEditingOriginalRide = Boolean(selectedRide?.id) && !isReturnDraft;
+    if (isEditingOriginalRide && selectedRide) {
+      let changedCount = 0;
+      const fieldsToCheck = ["driver_name", "ride_date", "departure_time", "arrival_time", "actual_arrival_time", "pickup_location", "delivery_location", "cargo", "notes", "status"];
+      fieldsToCheck.forEach(field => {
+        if (String(selectedRide[field] || "").trim() !== String(formData[field] || "").trim()) changedCount++;
+      });
+      if (changedCount >= 2) {
+        if (!window.confirm(`Je hebt ${changedCount} velden aangepast. Opslaan?`)) return;
+      }
     }
+
     onSave({ ...formData, pickup_location: formData.pickup_location.trim(), delivery_location: formData.delivery_location.trim(), cargo: formData.cargo.trim(), notes: formData.notes.trim() });
   }
 
@@ -930,38 +989,24 @@ function RideEditor({ selectedRide, onSave, onDelete, onNew, saving, onShift, on
   }
 
   const isEditingOriginalRide = Boolean(selectedRide?.id) && !isReturnDraft;
-
-  const dropdownStyle = {
-    position: "absolute", top: "100%", right: 0, zIndex: 10, background: theme.cardBg, 
-    border: `1px solid ${theme.border}`, borderRadius: 10, boxShadow: theme.shadow,
-    marginTop: 4, width: "200px", overflow: "hidden"
-  };
-  const dropdownItemStyle = {
-    padding: "10px 12px", cursor: "pointer", fontSize: 13, color: theme.textMain,
-    borderBottom: `1px solid ${theme.border}`
-  };
+  const dropdownStyle = { position: "absolute", top: "100%", right: 0, zIndex: 10, background: theme.cardBg, border: `1px solid ${theme.border}`, borderRadius: 10, boxShadow: theme.shadow, marginTop: 4, width: "200px", overflow: "hidden" };
+  const dropdownItemStyle = { padding: "10px 12px", cursor: "pointer", fontSize: 13, color: theme.textMain, borderBottom: `1px solid ${theme.border}` };
 
   return (
     <div style={{ background: theme.cardBg, borderRadius: 20, border: `1px solid ${theme.border}`, boxShadow: theme.shadow, padding: 16, position: windowWidth < 1000 ? "static" : "sticky", top: 98, transition: "all 0.3s ease" }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", marginBottom: 12 }}>
-        <div>
-          <div style={{ fontSize: 18, fontWeight: 900, color: theme.textMain, transition: "color 0.3s ease" }}>
-            {isEditingOriginalRide ? "Rit bewerken" : isReturnDraft ? "Nieuwe retour rit" : "Nieuwe rit"}
-          </div>
+        <div style={{ fontSize: 18, fontWeight: 900, color: theme.textMain }}>
+          {isEditingOriginalRide ? "Rit bewerken" : isReturnDraft ? "Nieuwe retour rit" : "Nieuwe rit"}
         </div>
-        {isEditingOriginalRide && (
-          <button type="button" onClick={onNew} style={{ ...getSecondaryButtonStyle(theme), padding: "8px 12px", fontSize: 12 }}>Nieuw</button>
-        )}
+        {isEditingOriginalRide && <button type="button" onClick={onNew} style={{ ...getSecondaryButtonStyle(theme), padding: "8px 12px", fontSize: 12 }}>Nieuw</button>}
       </div>
 
       <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
           <label style={getLabelStyle(theme)}>Chauffeur
             <select value={formData.driver_name} onChange={(e) => updateField("driver_name", e.target.value)} style={getInputStyle(theme)}>
-              {!driverOptions.includes(formData.driver_name) && formData.driver_name && (
-                <option value={formData.driver_name}>{formData.driver_name} (Inactief)</option>
-              )}
-              {driverOptions.map((driver) => (<option key={driver} value={driver}>{driver}</option>))}
+              {!driverOptions?.includes(formData.driver_name) && formData.driver_name && <option value={formData.driver_name}>{formData.driver_name} (Inactief)</option>}
+              {driverOptions?.map((driver) => (<option key={driver} value={driver}>{driver}</option>))}
             </select>
           </label>
           <label style={getLabelStyle(theme)}>Datum<input type="date" value={formData.ride_date} onChange={(e) => updateField("ride_date", e.target.value)} style={getInputStyle(theme)} /></label>
@@ -981,28 +1026,11 @@ function RideEditor({ selectedRide, onSave, onDelete, onNew, saving, onShift, on
           Van locatie
           <div style={{ display: "flex", gap: 8 }}>
             <input type="text" value={formData.pickup_location} onChange={(e) => updateField("pickup_location", e.target.value)} placeholder="Bijv. Amsterdam" style={getInputStyle(theme)} />
-            <button 
-              type="button" 
-              onClick={() => { setShowPickupDropdown(!showPickupDropdown); setShowDeliveryDropdown(false); }}
-              style={{ ...getSecondaryButtonStyle(theme), padding: "0 14px", fontSize: 18, fontWeight: 900 }}
-              title="Veelgebruikte locaties (afgelopen 14 dagen)"
-            >+</button>
+            <button type="button" onClick={() => { setShowPickupDropdown(!showPickupDropdown); setShowDeliveryDropdown(false); }} style={{ ...getSecondaryButtonStyle(theme), padding: "0 14px", fontSize: 18, fontWeight: 900 }}>+</button>
           </div>
           {showPickupDropdown && (
             <div style={dropdownStyle}>
-              {frequentLocations.length > 0 ? frequentLocations.map(loc => (
-                <div 
-                  key={loc} 
-                  style={dropdownItemStyle}
-                  onClick={() => { updateField("pickup_location", loc); setShowPickupDropdown(false); }}
-                  onMouseEnter={(e) => e.target.style.background = theme.rowSelected}
-                  onMouseLeave={(e) => e.target.style.background = "transparent"}
-                >
-                  {loc}
-                </div>
-              )) : (
-                <div style={{...dropdownItemStyle, color: theme.textMuted, cursor: 'default'}}>Geen recente data</div>
-              )}
+              {frequentLocations?.length > 0 ? frequentLocations.map(loc => (<div key={loc} style={dropdownItemStyle} onClick={() => { updateField("pickup_location", loc); setShowPickupDropdown(false); }}>{loc}</div>)) : <div style={{...dropdownItemStyle, color: theme.textMuted}}>Geen data</div>}
             </div>
           )}
         </label>
@@ -1011,33 +1039,25 @@ function RideEditor({ selectedRide, onSave, onDelete, onNew, saving, onShift, on
           Naar locatie
           <div style={{ display: "flex", gap: 8 }}>
             <input type="text" value={formData.delivery_location} onChange={(e) => updateField("delivery_location", e.target.value)} placeholder="Bijv. Rotterdam" style={getInputStyle(theme)} />
-            <button 
-              type="button" 
-              onClick={() => { setShowDeliveryDropdown(!showDeliveryDropdown); setShowPickupDropdown(false); }}
-              style={{ ...getSecondaryButtonStyle(theme), padding: "0 14px", fontSize: 18, fontWeight: 900 }}
-              title="Veelgebruikte locaties (afgelopen 14 dagen)"
-            >+</button>
+            <button type="button" onClick={() => { setShowDeliveryDropdown(!showDeliveryDropdown); setShowPickupDropdown(false); }} style={{ ...getSecondaryButtonStyle(theme), padding: "0 14px", fontSize: 18, fontWeight: 900 }}>+</button>
           </div>
           {showDeliveryDropdown && (
             <div style={dropdownStyle}>
-              {frequentLocations.length > 0 ? frequentLocations.map(loc => (
-                <div 
-                  key={loc} 
-                  style={dropdownItemStyle}
-                  onClick={() => { updateField("delivery_location", loc); setShowDeliveryDropdown(false); }}
-                  onMouseEnter={(e) => e.target.style.background = theme.rowSelected}
-                  onMouseLeave={(e) => e.target.style.background = "transparent"}
-                >
-                  {loc}
-                </div>
-              )) : (
-                <div style={{...dropdownItemStyle, color: theme.textMuted, cursor: 'default'}}>Geen recente data</div>
-              )}
+              {frequentLocations?.length > 0 ? frequentLocations.map(loc => (<div key={loc} style={dropdownItemStyle} onClick={() => { updateField("delivery_location", loc); setShowDeliveryDropdown(false); }}>{loc}</div>)) : <div style={{...dropdownItemStyle, color: theme.textMuted}}>Geen data</div>}
             </div>
           )}
         </label>
 
-        <label style={getLabelStyle(theme)}>Kenteken / Lading<input type="text" value={formData.cargo} onChange={(e) => updateField("cargo", e.target.value)} placeholder="Bijv. V-123-AB" style={getInputStyle(theme)} /></label>
+        <label style={getLabelStyle(theme)}>
+          Kenteken / Lading
+          <div style={{ display: "flex", gap: 8 }}>
+            <input type="text" value={formData.cargo} onChange={(e) => updateField("cargo", e.target.value.toUpperCase())} placeholder="AB-123-C" style={getInputStyle(theme)} />
+            <button type="button" onClick={fetchCarDetails} disabled={isFetchingRDW || !formData.cargo} style={{ ...getSecondaryButtonStyle(theme), padding: "0 14px", fontSize: 14, fontWeight: 800, whiteSpace: "nowrap" }}>
+              {isFetchingRDW ? "..." : "🚗 Zoek"}
+            </button>
+          </div>
+        </label>
+
         <label style={getLabelStyle(theme)}>Notities<textarea value={formData.notes} onChange={(e) => updateField("notes", e.target.value)} placeholder="Extra instructies" style={{ ...getInputStyle(theme), minHeight: 60, resize: "vertical" }} /></label>
 
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 4 }}>
@@ -1045,26 +1065,16 @@ function RideEditor({ selectedRide, onSave, onDelete, onNew, saving, onShift, on
           {isEditingOriginalRide && (
             <>
               <button type="button" onClick={handleCreateReturnRide} disabled={saving} style={getSecondaryButtonStyle(theme)}>Retour</button>
-              <button 
-                type="button" 
-                onClick={() => { 
-                  exportRideToWord(selectedRide); 
-                  if (selectedRide.id && !selectedRide.workcard_printed) {
-                    onMarkPrinted(selectedRide.id);
-                  }
-                }} 
-                disabled={saving} 
-                style={{ ...getSecondaryButtonStyle(theme), background: theme.isDark ? "rgba(59, 130, 246, 0.2)" : "#eff6ff", color: theme.isDark ? "#93c5fd" : "#1d4ed8", border: theme.isDark ? "1px solid rgba(59, 130, 246, 0.4)" : "1px solid #bfdbfe", padding: "10px 14px", display: "flex", alignItems: "center", gap: 6 }}
-              >
-                📄 Werkkaart {selectedRide?.workcard_printed && <span style={{ color: "#10b981", fontSize: "14px", fontWeight: "900" }} title="Is al geprint">✔</span>}
+              <button type="button" onClick={() => { exportRideToWord(selectedRide); if (selectedRide.id && !selectedRide.workcard_printed) onMarkPrinted(selectedRide.id); }} disabled={saving} style={{ ...getSecondaryButtonStyle(theme), background: theme.isDark ? "rgba(59, 130, 246, 0.2)" : "#eff6ff", color: theme.isDark ? "#93c5fd" : "#1d4ed8", border: theme.isDark ? "1px solid rgba(59, 130, 246, 0.4)" : "1px solid #bfdbfe", padding: "10px 14px", display: "flex", alignItems: "center", gap: 6 }}>
+                📄 Werkkaart {selectedRide?.workcard_printed && <span style={{ color: "#10b981", fontSize: "14px", fontWeight: "900" }}>✔</span>}
               </button>
-              <button type="button" onClick={() => onDelete(selectedRide.id)} disabled={saving} style={{ background: theme.isDark ? "rgba(185, 28, 28, 0.2)" : "#fee2e2", color: theme.isDark ? "#fca5a5" : "#b91c1c", border: theme.isDark ? "1px solid rgba(185, 28, 28, 0.4)" : "1px solid #fecaca", borderRadius: 10, padding: "10px 14px", fontWeight: 800, cursor: "pointer", transition: "all 0.3s ease" }}>Verwijderen</button>
+              <button type="button" onClick={() => onDelete(selectedRide.id)} disabled={saving} style={{ background: theme.isDark ? "rgba(185, 28, 28, 0.2)" : "#fee2e2", color: theme.isDark ? "#fca5a5" : "#b91c1c", border: theme.isDark ? "1px solid rgba(185, 28, 28, 0.5)" : "1px solid #fecaca", borderRadius: 10, padding: "10px 14px", fontWeight: 800, cursor: "pointer" }}>Verwijderen</button>
             </>
           )}
         </div>
-
+        
         {isEditingOriginalRide && (
-          <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px dashed ${theme.border}`, display: "flex", flexDirection: "column", gap: 8, transition: "border-color 0.3s ease" }}>
+          <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px dashed ${theme.border}`, display: "flex", flexDirection: "column", gap: 8 }}>
             <div style={{ color: theme.textMain, fontSize: 13, fontWeight: 700 }}>Bulk opschuiven</div>
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
               <input type="number" value={shiftMinutes} onChange={(e) => setShiftMinutes(Number(e.target.value))} style={{ ...getInputStyle(theme), width: 70, padding: "8px 10px" }} />
@@ -1116,7 +1126,7 @@ function RideCardsMobile({ rides, selectedRideId, onSelectRide }) {
   );
 }
 
-function RideTable({ rides, selectedRideId, onSelectRide, search, setSearch, statusFilter, setStatusFilter, driverFilter, setDriverFilter, dateFilter, setDateFilter, clearFilters }) {
+function RideTable({ rides, selectedRideId, onSelectRide, search, setSearch, statusFilter, setStatusFilter, driverFilter, setDriverFilter, dateFilter, setDateFilter, clearFilters, driverOptions }) {
   const windowWidth = useWindowWidth();
   const isNarrow = windowWidth < 900;
   const isMobileCards = windowWidth < 700;
@@ -1128,7 +1138,7 @@ function RideTable({ rides, selectedRideId, onSelectRide, search, setSearch, sta
   
   const allFilterDrivers = useMemo(() => {
     return [...new Set([...driverOptions, ...rides.map(r => r.driver_name)])].filter(Boolean);
-  }, [rides]);
+  }, [driverOptions, rides]);
 
   return (
     <div style={{ background: theme.cardBg, borderRadius: 24, border: `1px solid ${theme.border}`, boxShadow: theme.shadow, overflow: "hidden", transition: "all 0.3s ease" }}>
@@ -1238,9 +1248,7 @@ function Dashboard({ session }) {
   async function fetchRidesData() {
     const { data, error } = await supabase
       .from("rides")
-      .select("*")
-      .order("ride_date", { ascending: true })
-      .order("departure_time", { ascending: true });
+      .select("*");
 
     if (!error) {
       return sortRides(data || []);
@@ -1307,6 +1315,7 @@ function Dashboard({ session }) {
     if (error) {
       alert(error.message);
     } else if (data) {
+      // Gebruik hier ook expliciet de sortRides functie
       setRides((prev) => sortRides(ride.id ? prev.map((r) => (r.id === data.id ? data : r)) : [...prev, data]));
       setSelectedRideId(data.id);
     }
@@ -1411,7 +1420,7 @@ function Dashboard({ session }) {
         {loading ? (
           <div style={{ background: theme.cardBg, padding: 24, borderRadius: 24, color: theme.textMain }}>Laden...</div>
         ) : activeTab === "statistics" ? (
-          <StatisticsDashboard rides={rides} />
+          <StatisticsDashboard rides={rides} driverOptions={driverOptions} />
         ) : (
           <div
             style={{
@@ -1435,6 +1444,7 @@ function Dashboard({ session }) {
               dateFilter={dateFilter}
               setDateFilter={setDateFilter}
               clearFilters={() => { setSearch(""); setStatusFilter("all"); setDriverFilter("all"); setDateFilter(""); }}
+              driverOptions={driverOptions}
             />
 
             <RideEditor
@@ -1446,6 +1456,7 @@ function Dashboard({ session }) {
               onShift={shiftSubsequentRides}
               onMarkPrinted={markWorkcardPrinted}
               frequentLocations={frequentLocations} 
+              driverOptions={driverOptions}
             />
           </div>
         )}
