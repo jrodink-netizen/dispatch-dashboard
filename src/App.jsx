@@ -48,7 +48,7 @@ const darkTheme = {
 const ThemeContext = createContext();
 const rideStatuses = ["Gepland", "Bevestigd", "Onderweg", "Afgerond"];
 
-// HIER STAAT JE VASTE LIJST CHAUFFEURS (Marvin is toegevoegd)
+// HIER STAAT JE VASTE LIJST CHAUFFEURS
 const driverOptions = ["Erwin", "Julian", "Gerben", "Fiona", "Marvin"];
 
 // --- Helper Functies ---
@@ -64,6 +64,18 @@ function calculateMedian(values) {
   const sorted = [...values].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
   return sorted.length % 2 !== 0 ? sorted[mid] : Math.round((sorted[mid - 1] + sorted[mid]) / 2);
+}
+
+// Berekent accuraat de lead time in kalenderdagen, onafhankelijk van tijdzones en DST.
+function calculateLeadTimeDays(createdAtStr, rideDateStr) {
+  if (!createdAtStr || !rideDateStr) return 0;
+  const createdDate = new Date(createdAtStr);
+  const createdMidnight = new Date(createdDate.getFullYear(), createdDate.getMonth(), createdDate.getDate());
+  const [year, month, day] = rideDateStr.split('-').map(Number);
+  const rideMidnight = new Date(year, month - 1, day);
+  const diffInMs = rideMidnight.getTime() - createdMidnight.getTime();
+  const diffInDays = Math.floor(diffInMs / (1000 * 60 * 60 * 24));
+  return Math.max(0, diffInDays);
 }
 
 function useWindowWidth() {
@@ -332,7 +344,6 @@ function StatCard({ title, value, sub }) {
   );
 }
 
-// ---------------- UITGEBREIDE STATISTIEKEN COMPONENT ----------------
 function StatisticsDashboard({ rides }) {
   const { theme } = useContext(ThemeContext);
   const isMobile = useWindowWidth() < 700;
@@ -351,7 +362,6 @@ function StatisticsDashboard({ rides }) {
     return colors;
   }, [allHistoricalDrivers]);
 
-  // --- CAPACITEIT STATEN ---
   const [activeDrivers, setActiveDrivers] = useState(2); 
   const [maxRidesPerDriver, setMaxRidesPerDriver] = useState(8);
   const dailyCapacity = activeDrivers * maxRidesPerDriver;
@@ -394,16 +404,50 @@ function StatisticsDashboard({ rides }) {
   
   const maxRides4Weeks = Math.max(...fourWeeksDates.map(date => rides.filter(r => r.ride_date === date).length), 0);
 
+  // NIEUWE VOORSPELLINGS LOGICA UIT DOCUMENT
   const predictionsData = useMemo(() => {
     const result = {};
     const today = parseLocalDate(todayString);
-    
+    const todayTime = today.getTime();
+    const maxTrackedLeadTime = 14; 
+
     const pastWorkdayRides = rides.filter(r => {
       if (r.ride_date >= todayString) return false;
       const d = parseLocalDate(r.ride_date);
       return d.getDay() !== 0 && d.getDay() !== 6;
     });
-    
+
+    const historicalPacing = {};
+    pastWorkdayRides.forEach(r => {
+      if (!historicalPacing[r.ride_date]) {
+        historicalPacing[r.ride_date] = [];
+      }
+      let leadTime = 2; 
+      if (r.created_at) {
+        leadTime = calculateLeadTimeDays(r.created_at, r.ride_date);
+      }
+      historicalPacing[r.ride_date].push(leadTime);
+    });
+
+    const pickupsByLeadTime = {};
+    Object.keys(historicalPacing).forEach(date => {
+      const leadTimes = historicalPacing[date];
+      const finalTotal = leadTimes.length;
+      for (let L = 1; L <= maxTrackedLeadTime; L++) {
+        const otbAtL = leadTimes.filter(lt => lt >= L).length;
+        const pickupAfterL = finalTotal - otbAtL;
+        if (!pickupsByLeadTime[L]) pickupsByLeadTime[L] = [];
+        pickupsByLeadTime[L].push(pickupAfterL);
+      }
+    });
+
+    const learnedMedianPickups = {};
+    for (let L = 1; L <= maxTrackedLeadTime; L++) {
+      learnedMedianPickups[L] = pickupsByLeadTime[L] && pickupsByLeadTime[L].length > 0
+        ? calculateMedian(pickupsByLeadTime[L])
+        : 0;
+    }
+
     const pastCountsPerDate = {};
     pastWorkdayRides.forEach(r => {
       pastCountsPerDate[r.ride_date] = (pastCountsPerDate[r.ride_date] || 0) + 1;
@@ -415,11 +459,10 @@ function StatisticsDashboard({ rides }) {
         result[dateStr] = null;
         return;
       }
-
+      
       const targetDate = parseLocalDate(dateStr);
       const dayOfWeek = targetDate.getDay();
-      const daysUntil = Math.max(0, Math.floor((targetDate - today) / (1000 * 60 * 60 * 24)));
-      const dayName = new Intl.DateTimeFormat("en-US", { weekday: "long" }).format(targetDate);
+      const daysUntil = Math.max(0, Math.floor((targetDate.getTime() - todayTime) / (1000 * 60 * 60 * 24)));
       const currentCount = rides.filter(r => r.ride_date === dateStr).length;
 
       if (dayOfWeek === 0 || dayOfWeek === 6) {
@@ -427,6 +470,7 @@ function StatisticsDashboard({ rides }) {
         return;
       }
 
+      const dayName = new Intl.DateTimeFormat("en-US", { weekday: "long" }).format(targetDate);
       const eightWeeksAgo = new Date(today);
       eightWeeksAgo.setDate(today.getDate() - 56);
       const historicalStr = eightWeeksAgo.toISOString().slice(0, 10);
@@ -440,11 +484,12 @@ function StatisticsDashboard({ rides }) {
       historicalRidesForDay.forEach(r => {
         countsPerDate[r.ride_date] = (countsPerDate[r.ride_date] || 0) + 1;
       });
+      
       const historicalTotals = Object.values(countsPerDate);
       const dataPoints = historicalTotals.length;
 
-      let baseMedian = 0;
-      let mad = 0; 
+      let baseMedian = globalMedian;
+      let mad = Math.max(2, Math.round(baseMedian * 0.2));
 
       if (dataPoints >= 3) {
         baseMedian = calculateMedian(historicalTotals);
@@ -454,24 +499,24 @@ function StatisticsDashboard({ rides }) {
         const localMedian = calculateMedian(historicalTotals);
         baseMedian = Math.round((localMedian + globalMedian) / 2);
         mad = Math.max(2, Math.round(baseMedian * 0.15));
+      }
+      
+      if (mad === 0) mad = Math.max(2, Math.round(baseMedian * 0.15));
+
+      let learnedPickup = 0;
+      if (daysUntil <= maxTrackedLeadTime) {
+        learnedPickup = learnedMedianPickups[daysUntil] || 0;
       } else {
-        baseMedian = globalMedian;
-        mad = Math.max(2, Math.round(baseMedian * 0.2));
+        learnedPickup = baseMedian;
       }
 
-      if (mad === 0) mad = Math.max(2, Math.round(baseMedian * 0.15)); 
+      let finalPrediction = currentCount + learnedPickup;
+      const ceiling = baseMedian + (mad * 2);
 
-      let remainingFactor = 1.0;
-      if (daysUntil === 1) remainingFactor = 0.2;      
-      else if (daysUntil === 2) remainingFactor = 0.4; 
-      else if (daysUntil === 3) remainingFactor = 0.6; 
-      else if (daysUntil <= 5) remainingFactor = 0.8;
-      else remainingFactor = 1.0;
-
-      const expectedCurrentCount = baseMedian * (1 - remainingFactor);
-      const pacingAdjustment = (currentCount - expectedCurrentCount) * 0.5;
+      if (finalPrediction > ceiling && currentCount < ceiling) {
+        finalPrediction = Math.round(ceiling + ((finalPrediction - ceiling) * 0.3));
+      }
       
-      let finalPrediction = Math.round(baseMedian + pacingAdjustment);
       finalPrediction = Math.max(currentCount, finalPrediction);
 
       let low = Math.max(currentCount, finalPrediction - mad);
@@ -480,16 +525,15 @@ function StatisticsDashboard({ rides }) {
 
       if (dataPoints < 3) {
         confidence = "Laag";
-        high += Math.round(baseMedian * 0.2); 
+        high += Math.round(baseMedian * 0.2);
       } else {
-        if (daysUntil <= 2) confidence = "Hoog"; 
+        if (daysUntil <= 2) confidence = "Hoog";
         else if (dataPoints >= 5 && daysUntil <= 7) confidence = "Middel";
         else confidence = "Laag";
       }
 
       result[dateStr] = { prediction: finalPrediction, low, high, confidence, dataPoints };
     });
-
     return result;
   }, [rides, todayString, fourWeeksDates]);
 
